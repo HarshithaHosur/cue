@@ -16,6 +16,12 @@ from intent_platform.ui.theme import Theme
 from intent_platform.ui.widgets.components import (
     GlowButton, SectionHeader, SidebarNavItem, StatusBadge
 )
+from intent_platform.ui.pages.interview.live_widgets import (
+    AudioWaveformWidget, LiveVideoPanel, LiveMetricCard, LiveTranscriptWidget
+)
+from intent_platform.ui.pages.interview.report_and_settings_view import (
+    PreviousInterviewsView, ReportsView, InterviewSettingsView
+)
 
 
 class InterviewDashboard(QWidget):
@@ -78,12 +84,16 @@ class InterviewDashboard(QWidget):
         self._stack.setStyleSheet("background: transparent;")
 
         # Sub-pages
+        self.previous_page = PreviousInterviewsView()
+        self.reports_page = ReportsView()
+        self.settings_page = InterviewSettingsView()
+
         self._stack.addWidget(self._build_interview_home())      # 0: Dashboard
         self._stack.addWidget(self._build_create_interview())    # 1: Create
         self._stack.addWidget(self._build_live_interview())      # 2: Live
-        self._stack.addWidget(self._build_placeholder("Previous Interviews", "📋", "No previous interviews found."))
-        self._stack.addWidget(self._build_placeholder("Reports", "📄", "No reports generated yet."))
-        self._stack.addWidget(self._build_placeholder("Interview Settings", "⚙", "Configure interview parameters."))
+        self._stack.addWidget(self.previous_page)                # 3: Previous
+        self._stack.addWidget(self.reports_page)                 # 4: Reports
+        self._stack.addWidget(self.settings_page)                # 5: Settings
 
         layout.addWidget(self._stack)
 
@@ -311,33 +321,44 @@ class InterviewDashboard(QWidget):
         return page
 
     def _build_live_interview(self):
-        """Professional meeting-like interface for live interviews."""
+        """Professional meeting-like interface for live interviews with real-time video, waveform, and AI analytics."""
         page = QWidget()
         page.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Left: Video area ──
-        video_area = QWidget()
-        video_area.setStyleSheet("background: transparent;")
-        video_layout = QVBoxLayout(video_area)
-        video_layout.setContentsMargins(20, 20, 10, 20)
-        video_layout.setSpacing(12)
+        # ── Left: Video streams, Audio Waveform & Transcript ──
+        left_area = QWidget()
+        left_area.setStyleSheet("background: transparent;")
+        left_layout = QVBoxLayout(left_area)
+        left_layout.setContentsMargins(18, 16, 12, 16)
+        left_layout.setSpacing(10)
 
-        # Candidate camera
-        cam_placeholder = _VideoPlaceholder("Candidate Camera", "📹", "No candidate connected")
-        video_layout.addWidget(cam_placeholder, 2)
+        # Top Stream row: Candidate camera & Screen share
+        streams_row = QHBoxLayout()
+        streams_row.setSpacing(10)
 
-        # Screen share
-        screen_placeholder = _VideoPlaceholder("Screen Share", "🖥", "No screen shared")
-        video_layout.addWidget(screen_placeholder, 3)
+        self.cam_panel = LiveVideoPanel("Candidate Camera (HD)", "📹", is_screen_share=False)
+        self.screen_panel = LiveVideoPanel("Screen Share / Workspace", "🖥", is_screen_share=True)
 
-        layout.addWidget(video_area, 3)
+        streams_row.addWidget(self.cam_panel, 1)
+        streams_row.addWidget(self.screen_panel, 1)
+        left_layout.addLayout(streams_row, 3)
 
-        # ── Right: AI Panel ──
+        # Audio Waveform Visualizer (Real-time voice spectrum)
+        self.waveform_widget = AudioWaveformWidget(num_bars=32)
+        left_layout.addWidget(self.waveform_widget)
+
+        # Live Transcript Ticker
+        self.transcript_widget = LiveTranscriptWidget()
+        left_layout.addWidget(self.transcript_widget)
+
+        layout.addWidget(left_area, 3)
+
+        # ── Right: AI Intelligence & Live Analytics ──
         right_panel = QWidget()
-        right_panel.setFixedWidth(320)
+        right_panel.setFixedWidth(380)
         right_panel.setStyleSheet(f"""
             QWidget {{
                 background-color: {Theme.BG_CARD};
@@ -345,26 +366,60 @@ class InterviewDashboard(QWidget):
             }}
         """)
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(16, 20, 16, 16)
-        right_layout.setSpacing(12)
+        right_layout.setContentsMargins(16, 16, 16, 16)
+        right_layout.setSpacing(10)
 
-        ai_title = QLabel("🤖 AI Assistant")
-        ai_title.setFont(QFont("Segoe UI", 15, QFont.Bold))
+        # Title & Live Badge Header
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+
+        ai_title = QLabel("🤖 AI Interview Agent")
+        ai_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         ai_title.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; border: none; background: transparent;")
-        right_layout.addWidget(ai_title)
+        header_row.addWidget(ai_title)
 
-        waiting_lbl = QLabel("Waiting for Interview...")
-        waiting_lbl.setFont(QFont("Segoe UI", 12))
-        waiting_lbl.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; border: none; background: transparent;")
-        waiting_lbl.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(waiting_lbl)
+        live_badge = StatusBadge("LIVE", "active")
+        header_row.addWidget(live_badge, alignment=Qt.AlignRight)
+        right_layout.addLayout(header_row)
 
-        # Analysis sections (placeholder)
-        for section_name in ["Communication Analysis", "Body Language", "Eye Contact",
-                             "Confidence", "Coding Behaviour", "Integrity Monitor",
-                             "Interview Notes"]:
-            section = _AnalysisSection(section_name)
+        status_lbl = QLabel("● Real-time Monitoring & AI Assistant Active")
+        status_lbl.setFont(QFont("Segoe UI", 11, QFont.DemiBold))
+        status_lbl.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; background: transparent;")
+        right_layout.addWidget(status_lbl)
+
+        # Live Metric Cards
+        self.card_pace = LiveMetricCard("Communication Pace", "142 WPM", 88, "Optimal", Theme.ACCENT_GREEN)
+        self.card_eye = LiveMetricCard("Eye Contact Ratio", "94%", 94, "Strong", Theme.ACCENT_CYAN)
+        self.card_integrity = LiveMetricCard("Integrity Monitor", "Clean", 98, "Verified", Theme.ACCENT_GREEN)
+        self.card_coding = LiveMetricCard("Coding Analytics", "Python", 85, "O(n) Time", Theme.ACCENT_PURPLE)
+
+        right_layout.addWidget(self.card_pace)
+        right_layout.addWidget(self.card_eye)
+        right_layout.addWidget(self.card_integrity)
+        right_layout.addWidget(self.card_coding)
+
+        # Standard Analysis Sections for AI Assistant and Notes
+        sections = [
+            ("AI Assistant Prompt", "Ready for commands..."),
+            ("Interview Notes", "Auto-generating summary...")
+        ]
+        for name, status in sections:
+            section = _AnalysisSection(name)
+            section._status = status
             right_layout.addWidget(section)
+
+        # AI Companion Status Bubble
+        companion_bubble = QLabel("💬 AI Companion: Listening to speech stream & tracking gesture shortcuts...")
+        companion_bubble.setWordWrap(True)
+        companion_bubble.setStyleSheet(f"""
+            background-color: {Theme.BG_DARKER};
+            color: {Theme.TEXT_PRIMARY};
+            border-radius: 8px;
+            padding: 10px;
+            font-style: italic;
+            font-size: 11px;
+        """)
+        right_layout.addWidget(companion_bubble)
 
         right_layout.addStretch()
         layout.addWidget(right_panel)
@@ -532,6 +587,7 @@ class _AnalysisSection(QWidget):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self._title = title
+        self._status = "No data"
         self.setFixedHeight(48)
 
     def paintEvent(self, event):
@@ -549,5 +605,5 @@ class _AnalysisSection(QWidget):
 
         p.setPen(QColor(Theme.TEXT_MUTED))
         p.setFont(QFont("Segoe UI", 10))
-        p.drawText(0, 0, w - 12, h, Qt.AlignRight | Qt.AlignVCenter, "No data")
+        p.drawText(0, 0, w - 12, h, Qt.AlignRight | Qt.AlignVCenter, self._status)
         p.end()

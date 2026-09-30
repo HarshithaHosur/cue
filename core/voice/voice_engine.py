@@ -48,6 +48,11 @@ class VoiceEngine:
         self.is_paused = False  # Set to True when authentication is lost
         self.wake_word = WAKE_WORD.lower()
         self.worker_thread: Optional[threading.Thread] = None
+        
+        # Interview Hooks
+        self.interview_mode: bool = False
+        self.interview_router = None
+        self.interview_transcript_tap = None
 
         # TTS init
         self._init_tts()
@@ -64,6 +69,10 @@ class VoiceEngine:
             self.tts_engine.setProperty('volume', TTS_VOLUME)
         except Exception:
             self.tts_engine = None
+
+    def set_interview_hooks(self, router, transcript_tap):
+        self.interview_router = router
+        self.interview_transcript_tap = transcript_tap
 
     def speak(self, text: str):
         """Asynchronously vocalizes feedback to the user."""
@@ -143,16 +152,18 @@ class VoiceEngine:
                 if not raw_text or self.is_paused:
                     continue
 
-                self._process_transcript(raw_text)
+                duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
+                self._process_transcript(raw_text, meta={"duration": duration})
 
             except sr.WaitTimeoutError:
                 continue
             except Exception:
                 time.sleep(0.5)
 
-    def _process_transcript(self, raw_text: str):
+    def _process_transcript(self, raw_text: str, meta: Optional[dict] = None):
         """Checks for wake word 'System' and dispatches intent."""
         import re
+        import time
         wake_pattern = r'\b' + re.escape(self.wake_word) + r'\b'
         has_wake = bool(re.search(wake_pattern, raw_text, re.IGNORECASE))
         # Strip conversational prefixes and wake word
@@ -160,6 +171,41 @@ class VoiceEngine:
         cleaned = re.sub(wake_pattern, '', cleaned, flags=re.IGNORECASE).strip()
 
         eval_text = cleaned if cleaned else raw_text
+        
+        if self.interview_mode:
+            duration = meta.get("duration", 0) if meta else 0
+            if self.interview_transcript_tap:
+                self.interview_transcript_tap({
+                    "text": raw_text,
+                    "duration": duration,
+                    "ts": time.time(),
+                    "has_wake": has_wake
+                })
+            
+            if has_wake:
+                if self.interview_router:
+                    action_msg = self.interview_router.handle(eval_text)
+                    if action_msg:
+                        db.log_event("voice_interview", raw_text, action_msg)
+                        if self.on_command_detected:
+                            self.on_command_detected(raw_text, action_msg)
+                        self.speak(action_msg)
+                        return
+                
+                # Fallback to normal classifier for wake words even in interview mode if router didn't handle it
+                prediction = self.classifier.predict(eval_text)
+                if prediction:
+                    intent, confidence, target_arg = prediction
+                    action_msg = self._execute_intent(intent, target_arg)
+                    if action_msg:
+                        db.log_event("voice", raw_text, f"Intent: {intent} (Confidence: {confidence:.2f})")
+                        if self.on_command_detected:
+                            self.on_command_detected(raw_text, action_msg)
+                        self.speak(action_msg)
+            
+            # If no wake word or nothing handled it in interview mode, suppress Gemini fallback and TTS
+            return
+
         prediction = self.classifier.predict(eval_text)
         if prediction:
             intent, confidence, target_arg = prediction

@@ -60,6 +60,10 @@ class IntentEngine(QThread):
         self.gesture_recognizer = GestureRecognizer()
         self.security_verifier = HandOwnershipVerifier()
 
+        # Interview Hooks
+        self.frame_taps = []
+        self.gesture_interceptor = None
+
         # Engine & Agent State
         self.is_running = False
         self.is_agent_active = False                # Starts deactivated until user clicks Robot button
@@ -163,6 +167,13 @@ class IntentEngine(QThread):
             # Flip for selfie-view
             frame = cv2.flip(frame, 1)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            for tap in self.frame_taps:
+                try:
+                    tap(frame)
+                except Exception as e:
+                    import logging
+                    logging.error(f"Frame tap error: {e}")
 
             right_hand_landmarks = None
             left_hand_landmarks = None
@@ -374,7 +385,18 @@ class IntentEngine(QThread):
         if recognized and recognized not in ('palm', 'peace', 'index_cursor'):
             # Detect active application before executing action
             current_context = ContextManager.detect_context()
-            action_label = execute_gesture(recognized, current_context)
+            
+            action_label = None
+            if self.gesture_interceptor:
+                try:
+                    action_label = self.gesture_interceptor(recognized, current_context)
+                except Exception as e:
+                    import logging
+                    logging.error(f"Gesture interceptor error: {e}")
+            
+            if action_label is None:
+                action_label = execute_gesture(recognized, current_context)
+                
             if action_label:
                 self.signals.gesture_detected.emit(recognized, action_label)
                 if recognized == 'fist':

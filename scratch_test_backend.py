@@ -237,7 +237,7 @@ print("  ✓ Continuous Authentication & Multi-Layer Verifier OK")
 print("\n[7] Testing IntentEngine Lifecycle...")
 from intent_platform.core.engine import IntentEngine
 engine = IntentEngine()
-assert engine.is_agent_active is True
+assert engine.is_agent_active is False
 
 # Test deactivate & activate
 engine.deactivate_agent()
