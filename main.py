@@ -7,9 +7,23 @@ import os
 from pathlib import Path
 
 # Add project root to sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+# Ensure intent_platform package resolves to project root
+try:
+    import intent_platform
+except ModuleNotFoundError:
+    import types
+    import core, ui, config, database
+    ip_mod = types.ModuleType('intent_platform')
+    ip_mod.__path__ = [str(BASE_DIR)]
+    sys.modules['intent_platform'] = ip_mod
+    sys.modules['intent_platform.core'] = core
+    sys.modules['intent_platform.ui'] = ui
+    sys.modules['intent_platform.config'] = config
+    sys.modules['intent_platform.database'] = database
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTimer

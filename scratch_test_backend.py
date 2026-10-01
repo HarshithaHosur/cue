@@ -8,7 +8,7 @@ import math
 import numpy as np
 
 # Ensure project root is on path
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
@@ -17,6 +17,20 @@ if sys.platform == 'win32':
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
+
+# Ensure intent_platform package maps to BASE_DIR
+try:
+    import intent_platform
+except ModuleNotFoundError:
+    import types
+    import core, ui, config, database
+    ip_mod = types.ModuleType('intent_platform')
+    ip_mod.__path__ = [BASE_DIR]
+    sys.modules['intent_platform'] = ip_mod
+    sys.modules['intent_platform.core'] = core
+    sys.modules['intent_platform.ui'] = ui
+    sys.modules['intent_platform.config'] = config
+    sys.modules['intent_platform.database'] = database
 
 print("=" * 60)
 print("  INTENT OS HCI BACKEND VERIFICATION SUITE")

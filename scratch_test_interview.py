@@ -21,6 +21,20 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
+# Ensure intent_platform package maps to BASE_DIR
+try:
+    import intent_platform
+except ModuleNotFoundError:
+    import types
+    import core, ui, config, database
+    ip_mod = types.ModuleType('intent_platform')
+    ip_mod.__path__ = [BASE_DIR]
+    sys.modules['intent_platform'] = ip_mod
+    sys.modules['intent_platform.core'] = core
+    sys.modules['intent_platform.ui'] = ui
+    sys.modules['intent_platform.config'] = config
+    sys.modules['intent_platform.database'] = database
+
 print("=" * 60)
 print("  AI INTERVIEW AGENT ACCEPTANCE TEST SUITE")
 print("=" * 60)

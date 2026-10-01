@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         user_handle = self.user_profile.get("username", "user")
 
         self.page_home = HomeDashboard(username=user_name)
-        self.page_interview = InterviewDashboard()
+        self.page_interview = InterviewDashboard(engine=self.engine, user_profile=self.user_profile)
         self.page_support = SupportDashboard()
         self.page_gestures = GestureVoiceSettingsView()
         self.page_analytics = AnalyticsPage()

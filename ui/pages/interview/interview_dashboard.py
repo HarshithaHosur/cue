@@ -22,6 +22,12 @@ from intent_platform.ui.pages.interview.live_widgets import (
 from intent_platform.ui.pages.interview.report_and_settings_view import (
     PreviousInterviewsView, ReportsView, InterviewSettingsView
 )
+from intent_platform.core.interview.store import interview_store
+from intent_platform.core.interview.session import InterviewSession
+from intent_platform.core.interview.models import InterviewSetup, InterviewState
+from intent_platform.core.interview.gesture_router import GestureRouter
+from intent_platform.core.interview.observation_engine import ObservationEngine
+from intent_platform.core.interview.voice_router import VoiceRouter
 
 
 class InterviewDashboard(QWidget):
@@ -29,8 +35,10 @@ class InterviewDashboard(QWidget):
 
     navigate_back = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, engine=None, user_profile=None, parent=None):
         super().__init__(parent)
+        self.engine = engine
+        self.user_profile = user_profile
         self._build_ui()
 
     def _build_ui(self):
@@ -109,6 +117,110 @@ class InterviewDashboard(QWidget):
         self._stack.setCurrentIndex(idx)
         for item in self._nav_items:
             item.set_active(item._page_id == page_id)
+
+    def _on_start_interview(self):
+        """Validate form, save via interview_store, create session, and transition to LIVE."""
+        title = self.input_title.text().strip() or "Standard AI Interview"
+        candidate = self.input_candidate.text().strip() or "Candidate"
+        role = self.input_role.text().strip() or "Software Engineer"
+        duration = self.spin_duration.value()
+        difficulty = self.combo_difficulty.currentText()
+
+        selected_rb = self.btn_group_type.checkedButton()
+        itype = selected_rb.text() if selected_rb else "Technical"
+
+        # 1. Save via interview_store
+        setup_data = {
+            "title": title,
+            "candidate_name": candidate,
+            "candidate_email": f"{candidate.lower().replace(' ', '.')}@example.com",
+            "job_role": role,
+            "interview_type": itype,
+            "duration_minutes": duration,
+            "difficulty": difficulty,
+            "status": "scheduled",
+        }
+        self.interview_id = interview_store.create_interview(setup_data)
+
+        # 2. Create InterviewSession
+        self.session = InterviewSession()
+        setup_obj = InterviewSetup(
+            title=title,
+            candidate_name=candidate,
+            job_role=role,
+            interview_type=itype,
+            duration_minutes=duration,
+            difficulty=difficulty,
+        )
+        self.session.initialize(setup_obj)
+        self.session.transition_to(InterviewState.VERIFYING)
+
+        # 3. Transition to LIVE
+        self._enter_live_session()
+
+    def _enter_live_session(self):
+        """Transition session to LIVE, hook engine frame tap, gesture interceptor, voice router, and timeline event listener."""
+        if hasattr(self, 'session') and self.session:
+            self.session.transition_to(InterviewState.LIVE)
+            # Step 4: Show timeline events from session.emit_event in live page
+            self.session.event_logged.connect(self._on_event_logged)
+
+        # Step 3: Wire routers & engine hooks
+        self.gesture_router = GestureRouter()
+        self.gesture_router.active = True
+        self.gesture_router.on_next_question = lambda: self._on_nav_question(1)
+        self.gesture_router.on_previous_question = lambda: self._on_nav_question(-1)
+
+        self.voice_router = VoiceRouter()
+        self.voice_router.on_next_question = lambda: self._on_nav_question(1)
+        self.voice_router.on_previous_question = lambda: self._on_nav_question(-1)
+
+        self.obs_engine = ObservationEngine()
+
+        if self.engine:
+            self.engine.add_frame_tap(self._on_frame_tap)
+            self.engine.gesture_interceptor = self.gesture_router.intercept
+            if hasattr(self.engine, 'voice_engine') and self.engine.voice_engine:
+                self.engine.voice_engine.set_interview_hooks(self.voice_router, self._on_transcript_tap)
+                self.engine.voice_engine.interview_mode = True
+
+        self._on_nav_click("iv_live")
+
+    def _exit_live_session(self):
+        """Undo all engine hooks and routers on End Interview."""
+        if self.engine:
+            self.engine.remove_frame_tap(self._on_frame_tap)
+            self.engine.gesture_interceptor = None
+            if hasattr(self.engine, 'voice_engine') and self.engine.voice_engine:
+                self.engine.voice_engine.set_interview_hooks(None, None)
+                self.engine.voice_engine.interview_mode = False
+
+        if hasattr(self, 'gesture_router') and self.gesture_router:
+            self.gesture_router.active = False
+
+        if hasattr(self, 'session') and self.session and self.session.state == InterviewState.LIVE:
+            self.session.transition_to(InterviewState.ENDED)
+            self.session.transition_to(InterviewState.REPORTED)
+
+    def _on_frame_tap(self, frame):
+        """Frame tap callback feeding live frame to ObservationEngine and video view."""
+        if hasattr(self, 'obs_engine') and self.obs_engine:
+            self.obs_engine.process_frame(frame)
+
+    def _on_transcript_tap(self, entry):
+        """Transcript tap callback feeding live transcript widget."""
+        role = "Interviewer" if entry.get("has_wake") else "Candidate"
+        text = entry.get("text", "")
+        if hasattr(self, 'transcript_widget') and self.transcript_widget:
+            self.transcript_widget.add_transcript(role, text)
+
+    def _on_event_logged(self, event_type, message, payload, timestamp):
+        """Step 4: Show timeline events from session.emit_event in live page."""
+        if hasattr(self, 'transcript_widget') and self.transcript_widget:
+            self.transcript_widget.add_transcript("Timeline", f"[{event_type.upper()}] {message}")
+
+    def _on_nav_question(self, delta):
+        pass
 
     # ── Sub-page builders ──
 
@@ -190,20 +302,26 @@ class InterviewDashboard(QWidget):
         form_layout.setSpacing(16)
 
         # Form fields
+        self.input_title = QLineEdit()
+        self.input_title.setPlaceholderText("e.g. Senior Python Developer Interview")
+        self.input_role = QLineEdit()
+        self.input_role.setPlaceholderText("e.g. Backend Engineer")
+        self.input_candidate = QLineEdit()
+        self.input_candidate.setPlaceholderText("e.g. John Doe")
+        self.input_meeting = QLineEdit()
+        self.input_meeting.setPlaceholderText("e.g. https://meet.google.com/...")
+
         fields = [
-            ("Interview Title", QLineEdit, {"placeholderText": "e.g. Senior Python Developer Interview"}),
-            ("Job Role", QLineEdit, {"placeholderText": "e.g. Backend Engineer"}),
-            ("Candidate Name", QLineEdit, {"placeholderText": "e.g. John Doe"}),
-            ("Meeting Link", QLineEdit, {"placeholderText": "e.g. https://meet.google.com/..."}),
+            ("Interview Title", self.input_title),
+            ("Job Role", self.input_role),
+            ("Candidate Name", self.input_candidate),
+            ("Meeting Link", self.input_meeting),
         ]
-        for label_text, widget_cls, props in fields:
+        for label_text, widget in fields:
             lbl = QLabel(label_text)
             lbl.setFont(QFont("Segoe UI", 12))
             lbl.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; border: none; background: transparent;")
             form_layout.addWidget(lbl)
-            widget = widget_cls()
-            if "placeholderText" in props:
-                widget.setPlaceholderText(props["placeholderText"])
             widget.setStyleSheet(f"""
                 QLineEdit {{
                     background-color: {Theme.BG_INPUT};
@@ -226,10 +344,10 @@ class InterviewDashboard(QWidget):
         dur_lbl.setFont(QFont("Segoe UI", 12))
         dur_lbl.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; border: none; background: transparent;")
         dur_group.addWidget(dur_lbl)
-        dur_spin = QSpinBox()
-        dur_spin.setRange(15, 180)
-        dur_spin.setValue(45)
-        dur_spin.setStyleSheet(f"""
+        self.spin_duration = QSpinBox()
+        self.spin_duration.setRange(15, 180)
+        self.spin_duration.setValue(45)
+        self.spin_duration.setStyleSheet(f"""
             QSpinBox {{
                 background-color: {Theme.BG_INPUT};
                 border: 1px solid {Theme.BORDER_SUBTLE};
@@ -239,7 +357,7 @@ class InterviewDashboard(QWidget):
                 font-size: 13px;
             }}
         """)
-        dur_group.addWidget(dur_spin)
+        dur_group.addWidget(self.spin_duration)
         row.addLayout(dur_group)
 
         diff_group = QVBoxLayout()
@@ -247,10 +365,10 @@ class InterviewDashboard(QWidget):
         diff_lbl.setFont(QFont("Segoe UI", 12))
         diff_lbl.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; border: none; background: transparent;")
         diff_group.addWidget(diff_lbl)
-        diff_combo = QComboBox()
-        diff_combo.addItems(["Easy", "Medium", "Hard", "Expert"])
-        diff_combo.setCurrentIndex(1)
-        diff_combo.setStyleSheet(f"""
+        self.combo_difficulty = QComboBox()
+        self.combo_difficulty.addItems(["Easy", "Medium", "Hard", "Expert"])
+        self.combo_difficulty.setCurrentIndex(1)
+        self.combo_difficulty.setStyleSheet(f"""
             QComboBox {{
                 background-color: {Theme.BG_INPUT};
                 border: 1px solid {Theme.BORDER_SUBTLE};
@@ -260,7 +378,7 @@ class InterviewDashboard(QWidget):
                 font-size: 13px;
             }}
         """)
-        diff_group.addWidget(diff_combo)
+        diff_group.addWidget(self.combo_difficulty)
         row.addLayout(diff_group)
 
         form_layout.addLayout(row)
@@ -292,11 +410,11 @@ class InterviewDashboard(QWidget):
                 background: {Theme.ACCENT_CYAN};
             }}
         """
-        btn_group = QButtonGroup(self)
+        self.btn_group_type = QButtonGroup(self)
         for tname in ["Technical", "HR", "Coding", "Aptitude"]:
             rb = QRadioButton(tname)
             rb.setStyleSheet(radio_style)
-            btn_group.addButton(rb)
+            self.btn_group_type.addButton(rb)
             type_row.addWidget(rb)
             if tname == "Technical":
                 rb.setChecked(True)
@@ -308,6 +426,7 @@ class InterviewDashboard(QWidget):
         start_btn = GlowButton("Start Interview", "🚀",
                                 gradient=(Theme.ACCENT_BLUE, Theme.ACCENT_PURPLE))
         start_btn.setFixedHeight(48)
+        start_btn.clicked.connect(self._on_start_interview)
         form_layout.addSpacing(8)
         form_layout.addWidget(start_btn)
 
