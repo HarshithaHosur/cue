@@ -112,6 +112,17 @@ TRAINING_CORPUS = {
     ],
     'previous_slide': [
         'previous slide', 'back slide', 'last slide'
+    ],
+    'support_agent': [
+        'help me', 'help me replace', 'help me return', 'help me refund',
+        'replace this order', 'return this order', 'refund this order',
+        'explain this page', 'summarize this policy', 'explain this',
+        'highlight refund policy', 'contact support', 'open customer support',
+        'fill this form', 'scroll down', 'scroll up', 'continue',
+        'my order arrived cold', 'my order is delayed', 'wrong product',
+        'download my statement', 'download statement', 'help me with this order',
+        'replace this', 'return this', 'what is this page',
+        'order is wrong', 'damaged product', 'complaint about my order'
     ]
 }
 

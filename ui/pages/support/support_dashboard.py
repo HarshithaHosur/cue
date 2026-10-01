@@ -4,21 +4,23 @@
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget,
-    QScrollArea, QFrame, QSizePolicy, QLineEdit, QGridLayout
+    QScrollArea, QFrame, QSizePolicy, QLineEdit, QGridLayout, QPushButton
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
     QFont, QColor, QPainter, QPainterPath, QBrush, QPen,
     QLinearGradient
 )
 from intent_platform.ui.theme import Theme
 from intent_platform.ui.widgets.components import SectionHeader, SidebarNavItem, GlowButton
+from intent_platform.ui.pages.support.agent_dashboard import AgentDashboard
 
 
 class SupportDashboard(QWidget):
     """AI Technical Support workspace with device diagnostics."""
 
     navigate_back = Signal()
+    navigate_to_agent = Signal()  # Emitted to open AI Customer Support Agent
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,6 +53,7 @@ class SupportDashboard(QWidget):
         self._nav_items = []
         for pid, icon, label in [
             ("sp_dash", "📊", "Dashboard"),
+            ("sp_agent", "🤖", "AI Support Agent"),
             ("sp_health", "💊", "Device Health"),
             ("sp_diag", "🔍", "Diagnostics"),
             ("sp_software", "📦", "Software"),
@@ -70,7 +73,10 @@ class SupportDashboard(QWidget):
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
         self._stack.addWidget(self._build_support_home())  # 0
-        self._stack.addWidget(self._build_device_health())  # 1
+        self.agent_dashboard = AgentDashboard()
+        self.agent_dashboard.navigate_back.connect(lambda: self._on_nav("sp_dash"))
+        self._stack.addWidget(self.agent_dashboard)  # 1 — AI Agent Dashboard
+        self._stack.addWidget(self._build_device_health())  # 2
         self._stack.addWidget(self._build_placeholder("Diagnostics", "Run hardware and software diagnostics."))
         self._stack.addWidget(self._build_placeholder("Installed Software", "Manage installed applications."))
         self._stack.addWidget(self._build_placeholder("System Updates", "Check for system updates."))
@@ -81,8 +87,8 @@ class SupportDashboard(QWidget):
         self._on_nav("sp_dash")
 
     def _on_nav(self, pid):
-        idx_map = {"sp_dash": 0, "sp_health": 1, "sp_diag": 2,
-                   "sp_software": 3, "sp_updates": 4, "sp_reports": 5, "sp_settings": 6}
+        idx_map = {"sp_dash": 0, "sp_agent": 1, "sp_health": 2, "sp_diag": 3,
+                   "sp_software": 4, "sp_updates": 5, "sp_reports": 6, "sp_settings": 7}
         self._stack.setCurrentIndex(idx_map.get(pid, 0))
         for item in self._nav_items:
             item.set_active(item._page_id == pid)
@@ -102,6 +108,28 @@ class SupportDashboard(QWidget):
         lay.setSpacing(20)
 
         lay.addWidget(SectionHeader("Technical Support", "AI-powered diagnostics and troubleshooting"))
+
+        # ── AI Customer Support Agent Launch Hero Button ──
+        agent_hero = QPushButton("🤖  Launch AI Customer Support Agent")
+        agent_hero.setCursor(Qt.PointingHandCursor)
+        agent_hero.setFixedHeight(54)
+        agent_hero.setFont(QFont("Segoe UI", 15, QFont.Bold))
+        agent_hero.setStyleSheet(f"""
+            QPushButton {{
+                background: {Theme.GRADIENT_SUPPORT};
+                color: white;
+                border-radius: 14px;
+                border: none;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #34d399,stop:1 #38bdf8);
+            }}
+        """)
+        agent_hero.clicked.connect(lambda: self._on_nav("sp_agent"))
+        lay.addWidget(agent_hero)
+        lay.addSpacing(4)
 
         # Search bar
         search = QLineEdit()

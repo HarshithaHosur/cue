@@ -50,10 +50,14 @@ class DesktopCompanionOverlay(QWidget):
         qml_state = "idle"
         if "listen" in state_lower:
             qml_state = "listening"
-        elif "think" in state_lower or "cursor" in state_lower:
+        elif "think" in state_lower or "cursor" in state_lower or "reading" in state_lower or "understanding" in state_lower or "planning" in state_lower:
             qml_state = "thinking"
         elif "execut" in state_lower:
             qml_state = "executing"
+        elif "wait" in state_lower or "confirm" in state_lower:
+            qml_state = "listening"  # Attentive waiting state
+        elif "speak" in state_lower:
+            qml_state = "success"    # Bright happy speaking state
         elif "success" in state_lower or "scroll" in state_lower or "saved" in state_lower or "activated" in state_lower or "completed" in state_lower:
             qml_state = "success"
         elif "error" in state_lower or "lost" in state_lower or "paused" in state_lower or "blocked" in state_lower:

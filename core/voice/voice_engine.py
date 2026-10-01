@@ -305,6 +305,10 @@ class VoiceEngine:
             elif intent == 'previous_slide':
                 return actions.previous_slide()
 
+            # 7. AI Customer Support Agent
+            elif intent == 'support_agent':
+                return "Routing to AI Support Agent"
+
         except Exception as e:
             return f"Error executing command: {str(e)}"
 

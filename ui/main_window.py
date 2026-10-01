@@ -19,6 +19,9 @@ from intent_platform.ui.pages.support.support_dashboard import SupportDashboard
 from intent_platform.ui.pages.gesture_voice_settings import GestureVoiceSettingsView
 from intent_platform.ui.pages.settings_profile import SettingsPage, ProfilePage, AnalyticsPage
 from intent_platform.ui.companion.companion_window import DesktopCompanionOverlay
+from intent_platform.core.support.support_agent import get_support_agent
+from intent_platform.core.support.highlighter import initialize_highlighter
+from intent_platform.core.support.audit_logger import global_audit_logger
 
 
 class MainWindow(QMainWindow):
@@ -36,8 +39,16 @@ class MainWindow(QMainWindow):
         self.companion = DesktopCompanionOverlay()
         self.companion.move(1400, 600)
 
+        # Initialize screen highlighter overlay (must exist before agent starts)
+        self.screen_highlighter = initialize_highlighter()
+
+        # Initialize AI Customer Support Agent
+        self.support_agent = get_support_agent()
+        self.support_agent.set_companion(self.companion)
+
         self._init_ui()
         self._connect_engine()
+        self._connect_support_agent()
 
     def _init_ui(self):
         self.setStyleSheet(f"""
@@ -396,12 +407,68 @@ class MainWindow(QMainWindow):
     @Slot(str, str)
     def _on_voice(self, transcript: str, action: str):
         self.companion.update_companion_state("speaking", f"Heard: '{transcript}'")
+        # Route support-related commands to the AI Customer Support Agent
+        self._route_to_support_agent(transcript)
+
+    def _route_to_support_agent(self, command: str):
+        """Checks if the voice command is a support-related request and routes it."""
+        cmd_lower = command.lower().strip()
+        support_triggers = [
+            'help me', 'replace', 'return', 'refund', 'explain this', 'explain page',
+            'customer support', 'support', 'order', 'complaint', 'contact',
+            'download statement', 'statement', 'scroll down', 'scroll up',
+            'highlight', 'fill this form', 'summarize', 'policy',
+            'continue', 'confirm', 'proceed', 'yes', 'stop', 'cancel', 'abort', 'no',
+            'cold', 'delayed', 'wrong', 'damaged',
+        ]
+        if any(kw in cmd_lower for kw in support_triggers):
+            # Route to agent dashboard and display there
+            agent_dash = self.page_support.agent_dashboard
+            agent_dash.add_user_message(command)
+            self.support_agent.handle_user_request(command)
 
     def closeEvent(self, event):
         if self.engine:
             self.engine.stop()
         if self.companion:
             self.companion.close()
+        if self.screen_highlighter:
+            self.screen_highlighter.close()
         from PySide6.QtWidgets import QApplication
         QApplication.quit()
         event.accept()
+
+    def _connect_support_agent(self):
+        """Wires the AI Customer Support Agent signals to the Agent Dashboard UI."""
+        agent = self.support_agent
+        agent_dash = self.page_support.agent_dashboard
+
+        # Reasoning steps -> Reasoning Panel
+        agent.signals.reasoning_step.connect(agent_dash.add_reasoning_step)
+        # AI text+voice responses -> Chat Panel
+        agent.signals.response_ready.connect(agent_dash.add_response)
+        # Context updates -> Context Bar
+        agent.signals.context_updated.connect(agent_dash.update_context)
+        # Agent state -> Status label & Companion animation
+        agent.signals.state_changed.connect(agent_dash.update_agent_state)
+        # Confirmation requests -> Confirmation Bar
+        agent.signals.confirmation_required.connect(agent_dash.show_confirmation)
+        # Action execution -> Chat Panel confirmation
+        agent.signals.action_executed.connect(agent_dash.on_action_executed)
+
+        # Audit trail entries -> Audit Panel
+        global_audit_logger.signals.entry_added.connect(agent_dash.add_audit_entry)
+
+        # Dashboard UI -> Agent: typed commands
+        agent_dash.user_command_submitted.connect(self._on_agent_dashboard_command)
+        # Dashboard UI -> Agent: confirm/cancel buttons
+        agent_dash.user_confirmed_action.connect(agent.confirm_pending_action)
+        agent_dash.user_cancelled_action.connect(agent.cancel_pending_action)
+
+        # Wire voice engine to support agent so it can speak
+        if self.engine and hasattr(self.engine, 'voice_engine'):
+            agent.set_voice_engine(self.engine.voice_engine)
+
+    def _on_agent_dashboard_command(self, command: str):
+        """Handles typed commands from the Agent Dashboard chat input."""
+        self.support_agent.handle_user_request(command)
