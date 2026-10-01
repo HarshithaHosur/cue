@@ -4,12 +4,20 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ── Paths ──
 BASE_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 ICONS_DIR = ASSETS_DIR / "icons"
 QML_DIR = BASE_DIR / "ui" / "companion" / "qml"
+
+# ── Automatically Load .env (never hardcode secrets) ──
+for env_candidate in [BASE_DIR / ".env", BASE_DIR.parent / ".env"]:
+    if env_candidate.exists():
+        load_dotenv(dotenv_path=env_candidate, override=False)
+load_dotenv(override=False)
+
 
 # ── Application ──
 APP_NAME = "Intent AI Platform"
