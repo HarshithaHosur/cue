@@ -29,10 +29,9 @@ class SupportPageAnalyzer:
     """
 
     CANDIDATE_MODELS = [
-        os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        GEMINI_MODEL,
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
     ]
 
     def __init__(self, api_key: Optional[str] = None):
@@ -140,7 +139,11 @@ Include "current_user_goal", "selected_item", "dialogs", and "warnings" when vis
 Never invent labels or coordinates. Coordinates are relative to the supplied screenshot. If the target is not clearly visible, set found=false and suggested_action="explain".
 Return ONLY valid JSON. No markdown code blocks.
 """
+            tried_models = set()
             for model_name in self.CANDIDATE_MODELS:
+                if model_name in tried_models:
+                    continue
+                tried_models.add(model_name)
                 try:
                     model = genai.GenerativeModel(
                         model_name=model_name,
@@ -170,7 +173,7 @@ Return ONLY valid JSON. No markdown code blocks.
                             raise ValueError("Gemini returned an unsupported action")
                         return parsed
                 except Exception as e:
-                    print(f"[PageAnalyzer] Gemini model {model_name} note: {e}")
+                    print(f"[PageAnalyzer] Gemini model {model_name} failed ({type(e).__name__}).")
 
         raise RuntimeError("Gemini Vision is unavailable; screen-grounded analysis was not generated.")
 
