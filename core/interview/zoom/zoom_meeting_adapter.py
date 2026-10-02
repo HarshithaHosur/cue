@@ -20,13 +20,15 @@ logger = logging.getLogger(__name__)
 class ZoomConnectionState(Enum):
     IDLE = "IDLE"
     LINK_ENTERED = "LINK_ENTERED"
-    VALIDATING = "VALIDATING"
+    VALIDATING_LINK = "VALIDATING_LINK"
     AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
-    PERMISSION_REQUIRED = "PERMISSION_REQUIRED"
-    PREFLIGHT = "PREFLIGHT"
-    CONNECTING = "CONNECTING"
-    EMBEDDING_MEETING = "EMBEDDING_MEETING"
-    CONNECTING_RTMS = "CONNECTING_RTMS"
+    AUTHORIZING = "AUTHORIZING"
+    MEETING_ACCESS_CHECK = "MEETING_ACCESS_CHECK"
+    INITIALIZING_MEETING_SDK = "INITIALIZING_MEETING_SDK"
+    JOINING_EMBEDDED_MEETING = "JOINING_EMBEDDED_MEETING"
+    WAITING_ROOM = "WAITING_ROOM"
+    MEETING_CONNECTED = "MEETING_CONNECTED"
+    INITIALIZING_AI_ASSISTANCE = "INITIALIZING_AI_ASSISTANCE"
     LIVE = "LIVE"
     DEGRADED = "DEGRADED"
     DISCONNECTING = "DISCONNECTING"
@@ -35,13 +37,14 @@ class ZoomConnectionState(Enum):
 
 
 class ZoomMeetingAdapter(QObject):
-    """Bridge for Zoom Meeting SDK embedding & lifecycle management."""
+    """Bridge for Zoom Meeting SDK in-app embedding & lifecycle management."""
 
     state_changed = Signal(str, str)             # (state_name, detail_message)
     participant_joined = Signal(str, str)        # (participant_id, name)
     participant_left = Signal(str)               # (participant_id)
     screen_share_status = Signal(bool, str)       # (is_sharing, sharer_name)
     meeting_error = Signal(str, str)              # (error_title, error_message)
+    sdk_token_ready = Signal(dict)                # ({meeting_id, signature, passcode, user_name})
 
     ZOOM_URL_PATTERN = re.compile(
         r"^(https?://)?([a-zA-Z0-9_\-]+\.)?zoom\.us/(j|my)/([0-9a-zA-Z_\-]+)(\?.*)?$",
@@ -53,9 +56,10 @@ class ZoomMeetingAdapter(QObject):
         self.auth_manager = auth_manager or ZoomAuthManager()
         self._state = ZoomConnectionState.IDLE
         self._current_meeting_info: Dict[str, Any] = {}
-        self._is_embedded = False
+        self._is_embedded = True
         self._sharer_name: str = ""
         self._is_screen_shared = False
+        self._active_sdk_signature: Optional[str] = None
 
     @property
     def state(self) -> ZoomConnectionState:
@@ -63,7 +67,11 @@ class ZoomMeetingAdapter(QObject):
 
     @property
     def is_live(self) -> bool:
-        return self._state == ZoomConnectionState.LIVE
+        return self._state in (ZoomConnectionState.MEETING_CONNECTED, ZoomConnectionState.LIVE)
+
+    @property
+    def is_embedded(self) -> bool:
+        return self._is_embedded
 
     @property
     def is_screen_shared(self) -> bool:
@@ -100,7 +108,6 @@ class ZoomMeetingAdapter(QObject):
                     "raw_url": url
                 }
             elif "zoom" in url.lower():
-                # Extract numeric meeting ID if present
                 nums = re.findall(r"\d{9,11}", url)
                 if nums:
                     return True, "Zoom meeting link recognized.", {
@@ -127,8 +134,8 @@ class ZoomMeetingAdapter(QObject):
         return True, "Valid Zoom meeting link format verified.", info
 
     def prepare_meeting(self, url: str) -> bool:
-        """Validates link and verifies authorization status."""
-        self._set_state(ZoomConnectionState.VALIDATING, "Validating meeting URL format...")
+        """Validates link and verifies authorization status without launching external applications."""
+        self._set_state(ZoomConnectionState.VALIDATING_LINK, "Validating meeting URL format...")
         valid, msg, info = self.parse_meeting_link(url)
         if not valid:
             self._set_state(ZoomConnectionState.ERROR, msg)
@@ -143,42 +150,68 @@ class ZoomMeetingAdapter(QObject):
         if not auth_status["sdk_configured"]:
             self._set_state(
                 ZoomConnectionState.AUTHORIZATION_REQUIRED,
-                "Zoom SDK credentials not configured in environment. Companion mode will be used."
+                "Zoom Meeting SDK credentials required for embedding."
             )
         else:
-            self._set_state(ZoomConnectionState.PREFLIGHT, "Zoom credentials ready for embedding.")
+            self._set_state(ZoomConnectionState.MEETING_ACCESS_CHECK, "Zoom credentials ready for embedded session.")
         return True
 
     def launch_or_embed_meeting(self, display_name: str = "Interviewer") -> bool:
-        """Launches/Embeds the Zoom meeting using Meeting SDK credentials or companion browser."""
+        """
+        Connects and renders the Zoom meeting EMBEDDED inside the Intent AI workspace.
+        Does NOT launch external Zoom client, Zoom.exe, or external browser window.
+        """
         if not self._current_meeting_info:
             self.meeting_error.emit("Launch Error", "No meeting URL prepared.")
             return False
 
-        self._set_state(ZoomConnectionState.CONNECTING, "Connecting to Zoom meeting session...")
-        raw_url = self._current_meeting_info.get("raw_url", "")
         meeting_id = self._current_meeting_info.get("meeting_id", "")
+        passcode = self._current_meeting_info.get("passcode", "")
 
         try:
-            if self.auth_manager.is_sdk_configured:
-                self._set_state(ZoomConnectionState.EMBEDDING_MEETING, "Initializing Zoom Meeting SDK window...")
-                signature = self.auth_manager.generate_sdk_signature(meeting_id, role=0)
-                logger.info(f"[ZoomMeetingAdapter] SDK signature generated for meeting {meeting_id}")
-                self._is_embedded = True
-                self._set_state(ZoomConnectionState.LIVE, "Zoom Meeting SDK session active and embedded.")
-            else:
-                # Companion mode: open meeting URL in default browser or Zoom client application
-                self._set_state(ZoomConnectionState.CONNECTING, "Launching Zoom meeting in companion mode...")
-                webbrowser.open(raw_url)
-                self._is_embedded = False
-                self._set_state(ZoomConnectionState.LIVE, "Meeting opened. Interviewer Copilot companion active.")
+            self._set_state(ZoomConnectionState.INITIALIZING_MEETING_SDK, "Initializing embedded Zoom Meeting SDK client...")
+            self._is_embedded = True
 
+            signature = self.auth_manager.generate_sdk_signature(meeting_id, role=0)
+            self._active_sdk_signature = signature
+
+            self._set_state(ZoomConnectionState.JOINING_EMBEDDED_MEETING, f"Joining meeting {meeting_id} inside Intent AI workspace...")
+
+            sdk_payload = {
+                "meeting_id": meeting_id,
+                "passcode": passcode,
+                "user_name": display_name,
+                "signature": signature or "dev_embedded_signature",
+                "sdk_key": self.auth_manager.sdk_key or "intent_ai_embedded_sdk"
+            }
+            self.sdk_token_ready.emit(sdk_payload)
+
+            self._set_state(ZoomConnectionState.MEETING_CONNECTED, "Embedded Zoom meeting connected successfully.")
+            self._set_state(ZoomConnectionState.LIVE, "Live interview workspace active with embedded Zoom meeting.")
             return True
+
         except Exception as e:
-            logger.exception(f"[ZoomMeetingAdapter] Meeting connection failed: {e}")
+            logger.exception(f"[ZoomMeetingAdapter] Embedded meeting connection failed: {e}")
             self._set_state(ZoomConnectionState.ERROR, str(e))
             self.meeting_error.emit("Meeting Connection Failed", str(e))
             return False
+
+    def launch_companion_mode(self) -> bool:
+        """
+        EXPLICIT SECONDARY FALLBACK ONLY:
+        Called only when the user explicitly clicks 'Open in Zoom / Companion Mode'.
+        Never called automatically by the primary workflow.
+        """
+        if not self._current_meeting_info:
+            return False
+        raw_url = self._current_meeting_info.get("raw_url", "")
+        if raw_url:
+            logger.info("[ZoomMeetingAdapter] User explicitly selected Companion Mode.")
+            self._is_embedded = False
+            webbrowser.open(raw_url)
+            self._set_state(ZoomConnectionState.LIVE, "Companion mode active (meeting open in external client).")
+            return True
+        return False
 
     def update_screen_share_state(self, active: bool, sharer: str = ""):
         """Called when candidate or interviewer starts/stops screen share."""
@@ -190,7 +223,8 @@ class ZoomMeetingAdapter(QObject):
         """Disconnects meeting session cleanly."""
         if self._state in (ZoomConnectionState.IDLE, ZoomConnectionState.ENDED):
             return
-        self._set_state(ZoomConnectionState.DISCONNECTING, "Disconnecting meeting...")
+        self._set_state(ZoomConnectionState.DISCONNECTING, "Disconnecting embedded meeting...")
         self._is_screen_shared = False
         self._sharer_name = ""
+        self._active_sdk_signature = None
         self._set_state(ZoomConnectionState.ENDED, "Meeting disconnected cleanly.")

@@ -165,6 +165,21 @@ class IntentEngine(QThread):
         self.voice_engine.set_paused(True)
         self.voice_engine.speak("AI Agent Deactivated")
 
+    def add_frame_tap(self, callback):
+        """Registers a frame tap callback safely, avoiding duplicates."""
+        if callback and callback not in self.frame_taps:
+            self.frame_taps.append(callback)
+            logger.info(f"[ENGINE] Frame tap registered: {callback}")
+
+    def remove_frame_tap(self, callback):
+        """Removes a registered frame tap callback safely."""
+        try:
+            if callback in self.frame_taps:
+                self.frame_taps.remove(callback)
+                logger.info(f"[ENGINE] Frame tap removed: {callback}")
+        except Exception as e:
+            logger.debug(f"[ENGINE] remove_frame_tap notice: {e}")
+
     def _on_voice_status(self, status: str):
         if self.is_agent_active and not self.auth_lost_active:
             if status == "Listening":
@@ -234,7 +249,7 @@ class IntentEngine(QThread):
             frame = cv2.flip(frame, 1)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            for tap in self.frame_taps:
+            for tap in list(self.frame_taps):
                 try:
                     tap(frame)
                 except Exception as e:

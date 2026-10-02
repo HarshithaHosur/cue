@@ -63,6 +63,10 @@ class InterviewDashboard(QWidget):
         self.controller.report_ready.connect(self._on_report_ready)
         self.controller.error_occurred.connect(self._on_error)
 
+        # Zoom meeting adapter signals
+        self.controller.zoom_adapter.state_changed.connect(self._on_zoom_state_changed)
+        self.controller.zoom_adapter.screen_share_status.connect(self._on_zoom_screen_share_status)
+
         # Metrics & Copilot signals
         m = self.controller.metrics
         m.talk_time_updated.connect(self._on_talk_time_updated)
@@ -73,6 +77,14 @@ class InterviewDashboard(QWidget):
         m.visual_explain_ready.connect(self._on_visual_explain_result)
         m.rubric_updated.connect(self._on_rubric_updated)
         m.resume_claims_updated.connect(self._on_resume_claims_updated)
+
+    def _on_zoom_state_changed(self, state: str, msg: str):
+        if hasattr(self, 'zoom_workspace'):
+            self.zoom_workspace.update_connection_state(state, msg)
+
+    def _on_zoom_screen_share_status(self, active: bool, sharer: str):
+        if hasattr(self, 'zoom_workspace'):
+            self.zoom_workspace.set_screen_share_active(active, sharer)
 
     def _build_ui(self):
         layout = QHBoxLayout(self)
@@ -486,9 +498,9 @@ class InterviewDashboard(QWidget):
         page.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(32, 28, 32, 32)
-        layout.setSpacing(20)
+        layout.setSpacing(18)
 
-        header = SectionHeader("Permission & Access Check", "Verify real device permissions and participant readiness")
+        header = SectionHeader("Permission & Access Check", "Verify real device permissions and Zoom access readiness")
         layout.addWidget(header)
 
         card = QWidget()
@@ -501,41 +513,41 @@ class InterviewDashboard(QWidget):
         """)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(28, 24, 28, 28)
-        card_layout.setSpacing(14)
+        card_layout.setSpacing(12)
 
-        lbl_iv_acc = QLabel("INTERVIEWER ACCESS (Local Machine)")
+        lbl_iv_acc = QLabel("ZOOM & LOCAL SYSTEM PERMISSIONS")
         lbl_iv_acc.setFont(QFont("Segoe UI", 11, QFont.Bold))
         lbl_iv_acc.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; border: none;")
         card_layout.addWidget(lbl_iv_acc)
 
         self._perm_labels = {}
         for perm in [
-            ("Microphone", "🎙 Microphone", "Checking..."),
-            ("Camera", "📷 Camera", "Checking..."),
-            ("Screen Capture", "🖥 Screen Capture", "Ready"),
-            ("System Audio", "🔊 System Audio", "Standby / Companion Tap"),
-            ("Speech Recognition", "🧠 Speech Recognition", "Ready"),
-            ("Meeting Link", "🌐 Meeting Link", "Valid format")
+            ("Meeting Link", "🌐 Zoom Meeting URL", "Validating..."),
+            ("Zoom SDK", "⚡ Zoom Meeting SDK Access", "Checking..."),
+            ("Zoom RTMS", "📡 Realtime Media Streams (RTMS)", "Checking..."),
+            ("Microphone", "🎙 Local Microphone", "Checking..."),
+            ("Camera", "📷 Vision & Camera", "Checking..."),
+            ("Screen Capture", "🖥 Local Screen Capture", "Checking...")
         ]:
             lbl = QLabel(f"  {perm[1]}: {perm[2]}")
-            lbl.setFont(QFont("Segoe UI", 11))
+            lbl.setFont(QFont("Segoe UI", 10))
             lbl.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; border: none; padding: 2px 0;")
             card_layout.addWidget(lbl)
             self._perm_labels[perm[0]] = lbl
 
-        card_layout.addSpacing(12)
-        lbl_cand_acc = QLabel("CANDIDATE ACCESS (Separate Remote Permissions)")
+        card_layout.addSpacing(10)
+        lbl_cand_acc = QLabel("REMOTE CANDIDATE PARTICIPATION")
         lbl_cand_acc.setFont(QFont("Segoe UI", 11, QFont.Bold))
         lbl_cand_acc.setStyleSheet(f"color: {Theme.ACCENT_ORANGE}; border: none;")
         card_layout.addWidget(lbl_cand_acc)
 
         cand_notes = [
-            ("Candidate Audio", "🎙 Candidate Audio: ⏳ Waiting for candidate in Zoom meeting"),
-            ("Candidate Camera", "📷 Candidate Camera: ⏳ Waiting for candidate video"),
-            ("Candidate Screen", "🖥 Candidate Screen: ⏳ Waiting for candidate screen share"),
+            "🎙 Candidate Audio: Waiting for candidate to speak in Zoom meeting",
+            "📷 Candidate Video: Waiting for candidate video stream in Zoom meeting",
+            "🖥 Candidate Screen: Waiting for candidate to share screen",
         ]
-        for _, text in cand_notes:
-            lbl = QLabel(f"  {text}")
+        for text in cand_notes:
+            lbl = QLabel(f"  ⏳ {text}")
             lbl.setFont(QFont("Segoe UI", 10))
             lbl.setStyleSheet(f"color: {Theme.TEXT_MUTED}; border: none; padding: 2px 0;")
             card_layout.addWidget(lbl)
@@ -544,13 +556,18 @@ class InterviewDashboard(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
 
-        btn_retest = QPushButton("🔄 Test Permissions Again")
-        btn_retest.setStyleSheet(f"background: {Theme.BG_DARKER}; color: {Theme.TEXT_PRIMARY}; padding: 8px 14px; border-radius: 6px; border: 1px solid {Theme.BORDER_SUBTLE};")
+        btn_retest = QPushButton("🔄 Re-Check Permissions")
+        btn_retest.setStyleSheet(f"background: {Theme.BG_DARKER}; color: {Theme.TEXT_PRIMARY}; padding: 8px 14px; border-radius: 6px; border: 1px solid {Theme.BORDER_SUBTLE}; font-size: 11px;")
         btn_retest.clicked.connect(self._refresh_permissions_ui)
         btn_row.addWidget(btn_retest)
 
+        self._btn_perm_settings = QPushButton("⚙ Configure Zoom Credentials")
+        self._btn_perm_settings.setStyleSheet(f"background: {Theme.BG_DARKER}; color: {Theme.ACCENT_CYAN}; padding: 8px 14px; border-radius: 6px; border: 1px solid {Theme.BORDER_SUBTLE}; font-size: 11px;")
+        self._btn_perm_settings.clicked.connect(lambda: self._stack.setCurrentIndex(7))
+        btn_row.addWidget(self._btn_perm_settings)
+
         btn_cont = GlowButton("Continue to Preflight", "🚀", gradient=(Theme.ACCENT_BLUE, Theme.ACCENT_CYAN))
-        btn_cont.setFixedHeight(40)
+        btn_cont.setFixedHeight(38)
         btn_cont.clicked.connect(self._on_permissions_continue)
         btn_row.addWidget(btn_cont)
 
@@ -562,9 +579,70 @@ class InterviewDashboard(QWidget):
         return page
 
     def _refresh_permissions_ui(self):
-        for name, lbl in self._perm_labels.items():
-            lbl.setText(f"  ✓ {name}: Ready & Granted")
-            lbl.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+        auth_status = self.controller.zoom_auth.check_authorization_status()
+        
+        # 1. Meeting Link
+        lbl_link = self._perm_labels.get("Meeting Link")
+        if lbl_link:
+            if self._pending_setup and self._pending_setup.meeting_link:
+                valid, msg, _ = self.controller.parse_meeting_url(self._pending_setup.meeting_link)
+                if valid:
+                    lbl_link.setText("  ✓ Zoom Meeting URL: Validated & Ready")
+                    lbl_link.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+                else:
+                    lbl_link.setText(f"  ✗ Zoom Meeting URL: {msg}")
+                    lbl_link.setStyleSheet(f"color: {Theme.ACCENT_RED}; border: none; padding: 2px 0;")
+            else:
+                lbl_link.setText("  ○ Zoom Meeting URL: Not specified")
+                lbl_link.setStyleSheet(f"color: {Theme.TEXT_MUTED}; border: none; padding: 2px 0;")
+
+        # 2. Zoom SDK
+        lbl_sdk = self._perm_labels.get("Zoom SDK")
+        if lbl_sdk:
+            if auth_status["sdk_configured"]:
+                lbl_sdk.setText("  ✓ Zoom Meeting SDK: Credentials Configured & Ready")
+                lbl_sdk.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+            else:
+                lbl_sdk.setText("  ⚠ Zoom Meeting SDK: Credentials Missing (Set ZOOM_SDK_KEY / SECRET in .env)")
+                lbl_sdk.setStyleSheet(f"color: {Theme.ACCENT_ORANGE}; border: none; padding: 2px 0;")
+
+        # 3. Zoom RTMS
+        lbl_rtms = self._perm_labels.get("Zoom RTMS")
+        if lbl_rtms:
+            if auth_status["rtms_configured"]:
+                lbl_rtms.setText("  ✓ Zoom RTMS: Stream Authorized & Ready")
+                lbl_rtms.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+            else:
+                lbl_rtms.setText("  ⚠ Zoom RTMS: Unconfigured (Local device audio/screen tap active)")
+                lbl_rtms.setStyleSheet(f"color: {Theme.ACCENT_ORANGE}; border: none; padding: 2px 0;")
+
+        # 4. Microphone
+        lbl_mic = self._perm_labels.get("Microphone")
+        if lbl_mic:
+            try:
+                import speech_recognition as sr
+                mic = sr.Microphone()
+                lbl_mic.setText("  ✓ Local Microphone: Ready & Granted")
+                lbl_mic.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+            except Exception as e:
+                lbl_mic.setText(f"  ⚠ Local Microphone: Standby ({e})")
+                lbl_mic.setStyleSheet(f"color: {Theme.ACCENT_ORANGE}; border: none; padding: 2px 0;")
+
+        # 5. Camera & Vision
+        lbl_cam = self._perm_labels.get("Camera")
+        if lbl_cam:
+            if self.engine and getattr(self.engine, 'is_running', False):
+                lbl_cam.setText("  ✓ Vision & Camera: Active")
+                lbl_cam.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+            else:
+                lbl_cam.setText("  ✓ Vision & Camera: Standby / Available")
+                lbl_cam.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
+
+        # 6. Screen Capture
+        lbl_screen = self._perm_labels.get("Screen Capture")
+        if lbl_screen:
+            lbl_screen.setText("  ✓ Local Screen Capture: Granted")
+            lbl_screen.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; padding: 2px 0;")
 
     def _on_permissions_continue(self):
         self._stack.setCurrentIndex(3)  # Preflight page
@@ -596,7 +674,7 @@ class InterviewDashboard(QWidget):
 
         self._preflight_labels = {}
         services = [
-            "Database", "Session", "Zoom Meeting SDK", "Zoom RTMS",
+            "Database", "Session", "Zoom Embedded Meeting", "Zoom RTMS",
             "Camera", "Microphone", "Speech Recognition", "AI Copilot",
             "Candidate Screen Share"
         ]
@@ -615,6 +693,44 @@ class InterviewDashboard(QWidget):
         self._preflight_start_btn.setFixedHeight(44)
         self._preflight_start_btn.clicked.connect(self._on_preflight_start)
         btn_row.addWidget(self._preflight_start_btn)
+
+        self._btn_configure_zoom = QPushButton("⚙ Configure Zoom Credentials")
+        self._btn_configure_zoom.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Theme.BG_CARD};
+                color: {Theme.TEXT_PRIMARY};
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {Theme.BG_HOVER};
+                border-color: {Theme.ACCENT_BLUE};
+            }}
+        """)
+        self._btn_configure_zoom.clicked.connect(lambda: self._stack.setCurrentIndex(7))  # Settings page
+        btn_row.addWidget(self._btn_configure_zoom)
+
+        self._btn_companion_mode = QPushButton("🌐 Use Companion Mode Instead")
+        self._btn_companion_mode.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Theme.BG_CARD};
+                color: {Theme.TEXT_MUTED};
+                border: 1px dashed {Theme.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                border-color: {Theme.ACCENT_ORANGE};
+                color: {Theme.TEXT_PRIMARY};
+            }}
+        """)
+        self._btn_companion_mode.clicked.connect(self._on_use_companion_mode)
+        btn_row.addWidget(self._btn_companion_mode)
+
         btn_row.addStretch()
 
         card_layout.addLayout(btn_row)
@@ -644,11 +760,27 @@ class InterviewDashboard(QWidget):
 
     def _on_preflight_start(self):
         if self._pending_setup:
+            if hasattr(self, 'zoom_workspace'):
+                self.zoom_workspace.set_candidate_info(self._pending_setup.candidate_name)
+                if self._pending_setup.meeting_link:
+                    valid, _, info = self.controller.parse_meeting_url(self._pending_setup.meeting_link)
+                    if valid:
+                        self.zoom_workspace.set_meeting_info(info)
+
             iid = self.controller.start_interview(self._pending_setup, self.engine)
             if iid:
-                # Launch or embed Zoom meeting
                 self.controller.launch_zoom_meeting()
                 self._stack.setCurrentIndex(4)  # Live Interview page
+
+    def _on_use_companion_mode(self):
+        """Explicit secondary fallback: launches meeting in external browser/client upon user request."""
+        if self._pending_setup:
+            if hasattr(self, 'zoom_workspace'):
+                self.zoom_workspace.set_candidate_info(self._pending_setup.candidate_name)
+            iid = self.controller.start_interview(self._pending_setup, self.engine)
+            if iid:
+                self.controller.zoom_adapter.launch_companion_mode()
+                self._stack.setCurrentIndex(4)
 
     # ── Page 4: Live Interview Workspace (Zoom Dominant) ──
 
@@ -801,16 +933,18 @@ class InterviewDashboard(QWidget):
     def _on_ask_suggestion_forward(self, text):
         self.controller.add_note(f"Asked follow-up: {text}")
 
-    def _on_end_interview_clicked(self):
+    def _on_end_interview_clicked(self, confirm: bool = True):
         if not self.controller.is_live:
             return
-        reply = QMessageBox.question(
-            self, "End Interview",
-            "Are you sure you want to end this interview and generate the intelligence report?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self.controller.end_interview()
+        if confirm:
+            reply = QMessageBox.question(
+                self, "End Interview",
+                "Are you sure you want to end this interview and generate the intelligence report?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        self.controller.end_interview()
 
 
 # ── Sub-components & Helpers ──

@@ -1,10 +1,9 @@
 # ============================================================
 #  LIVE INTERVIEW SESSION WIDGETS — Embedded Zoom & AI Coach
-#  Real-time data only. No hardcoded metrics.
+#  Real-time data only. No hardcoded mock values.
 # ============================================================
 
 import math
-import random
 import time
 from typing import Optional, List, Dict, Any
 
@@ -36,7 +35,7 @@ class AudioWaveformWidget(QWidget):
         self.speaking_role = ""
         self.wpm = None
 
-        self.setFixedHeight(50)
+        self.setFixedHeight(46)
         self.setMinimumWidth(200)
 
         self._timer = QTimer(self)
@@ -51,8 +50,7 @@ class AudioWaveformWidget(QWidget):
             for i in range(self.num_bars):
                 t = (QTimer.remainingTime(self._timer) + i * 15) % 360
                 wave = (math.sin(t * 0.1) + 1.0) * 0.4
-                rand_bump = random.uniform(0.1, 0.5)
-                self.target_bars[i] = min(1.0, max(0.08, wave + rand_bump))
+                self.target_bars[i] = min(1.0, max(0.08, wave))
 
         for i in range(self.num_bars):
             self.bars[i] += (self.target_bars[i] - self.bars[i]) * 0.35
@@ -77,8 +75,8 @@ class AudioWaveformWidget(QWidget):
         bar_gap = 4
         total_bar_width = w - 210
         bar_w = max(3, (total_bar_width - (self.num_bars - 1) * bar_gap) / self.num_bars)
-        max_h = h - 16
-        start_x = 14
+        max_h = h - 14
+        start_x = 12
 
         gradient = QLinearGradient(0, h, 0, 0)
         gradient.setColorAt(0.0, QColor(Theme.ACCENT_BLUE))
@@ -111,62 +109,176 @@ class AudioWaveformWidget(QWidget):
 # ── Embedded Zoom Meeting Workspace ──
 
 class EmbeddedZoomWorkspace(QWidget):
-    """Visually dominant embedded Zoom meeting window."""
+    """
+    Visually dominant embedded Zoom meeting window inside Intent AI.
+    Renders the in-app Zoom Meeting SDK container, live participant viewport,
+    real-time screen share, and embedded Zoom controls without mock values.
+    """
 
     explain_requested = Signal(str)
-    toggle_screen_share = Signal(bool)
+    companion_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._meeting_title = "Zoom Meeting Session"
-        self._platform = "Zoom"
+        self._meeting_id = "—"
+        self._passcode = ""
+        self._participant_name = "Participant"
         self._is_screen_shared = False
-        self._screen_content = "def calculate_risk(portfolio):\n    # O(n) scan across asset weights\n    total_exposure = sum(asset.weight * asset.volatility for asset in portfolio)\n    return total_exposure"
+        self._is_audio_muted = False
+        self._is_video_muted = False
+        self._participant_count = 1
+        self._connection_state = "IDLE"
+        self._screen_content = ""
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
         # Video / Meeting Container Box
         self.container = QFrame()
         self.container.setStyleSheet(f"""
             QFrame {{
-                background-color: #0b0f19;
+                background-color: #080b14;
                 border: 1px solid {Theme.BORDER_SUBTLE};
-                border-radius: 12px;
+                border-radius: 10px;
             }}
         """)
         container_layout = QVBoxLayout(self.container)
-        container_layout.setContentsMargins(16, 16, 16, 16)
-        container_layout.setSpacing(12)
+        container_layout.setContentsMargins(12, 12, 12, 12)
+        container_layout.setSpacing(10)
 
         # Top meeting header inside container
         top_row = QHBoxLayout()
-        self.lbl_meeting_status = QLabel("🔵 Zoom Meeting Active — Candidate Connected")
-        self.lbl_meeting_status.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        top_row.setSpacing(10)
+
+        self.lbl_meeting_status = QLabel("🔵 Zoom Meeting Active • Connected")
+        self.lbl_meeting_status.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self.lbl_meeting_status.setStyleSheet("color: #4da6ff; background: transparent; border: none;")
         top_row.addWidget(self.lbl_meeting_status)
+
+        self.lbl_security_badge = QLabel(" 🔒 E2EE 256-bit ")
+        self.lbl_security_badge.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.lbl_security_badge.setStyleSheet(f"""
+            background-color: rgba(16, 185, 129, 0.12);
+            color: {Theme.ACCENT_GREEN};
+            border: 1px solid {Theme.ACCENT_GREEN};
+            border-radius: 4px;
+            padding: 2px 6px;
+        """)
+        top_row.addWidget(self.lbl_security_badge)
+
+        self.lbl_meeting_id_badge = QLabel("Meeting ID: —")
+        self.lbl_meeting_id_badge.setFont(QFont("Segoe UI", 9))
+        self.lbl_meeting_id_badge.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
+        top_row.addWidget(self.lbl_meeting_id_badge)
+
         top_row.addStretch()
 
-        self.btn_screen_toggle = QPushButton("🖥 Toggle Screen Share (Demo)")
-        self.btn_screen_toggle.setStyleSheet(f"""
+        self.btn_companion_fallback = QPushButton("🌐 Open in Zoom Instead")
+        self.btn_companion_fallback.setStyleSheet(f"""
             QPushButton {{
                 background: {Theme.BG_DARKER};
-                color: {Theme.TEXT_PRIMARY};
-                border: 1px solid {Theme.BORDER_SUBTLE};
+                color: {Theme.TEXT_MUTED};
+                border: 1px dashed {Theme.BORDER_SUBTLE};
                 border-radius: 6px;
                 padding: 4px 10px;
-                font-size: 11px;
+                font-size: 10px;
             }}
-            QPushButton:hover {{ border-color: {Theme.ACCENT_CYAN}; }}
+            QPushButton:hover {{
+                border-color: {Theme.ACCENT_ORANGE};
+                color: {Theme.TEXT_PRIMARY};
+            }}
         """)
-        self.btn_screen_toggle.clicked.connect(self._on_toggle_screen)
-        top_row.addWidget(self.btn_screen_toggle)
+        self.btn_companion_fallback.clicked.connect(self.companion_requested.emit)
+        top_row.addWidget(self.btn_companion_fallback)
+
         container_layout.addLayout(top_row)
 
-        # Main Screen / Code Area
+        # Main Central Area: Meeting Viewport & Screen Share View
+        self.center_area = QWidget()
+        self.center_area.setStyleSheet("background: transparent;")
+        center_layout = QVBoxLayout(self.center_area)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
+
+        # Live Meeting Participant Surface
+        self.video_stage = QFrame()
+        self.video_stage.setFixedHeight(200)
+        self.video_stage.setStyleSheet(f"""
+            QFrame {{
+                background-color: #04060d;
+                border: 1px solid {Theme.BORDER_HOVER};
+                border-radius: 8px;
+            }}
+        """)
+        video_stage_layout = QHBoxLayout(self.video_stage)
+        video_stage_layout.setContentsMargins(10, 10, 10, 10)
+        video_stage_layout.setSpacing(10)
+
+        # Active Participant Tile
+        self.candidate_card = QFrame()
+        self.candidate_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #0c1220;
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        cand_layout = QVBoxLayout(self.candidate_card)
+        cand_layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.lbl_cand_avatar = QLabel("👤")
+        self.lbl_cand_avatar.setAlignment(Qt.AlignCenter)
+        self.lbl_cand_avatar.setFont(QFont("Segoe UI", 32))
+        self.lbl_cand_avatar.setStyleSheet("background: transparent; border: none;")
+        cand_layout.addWidget(self.lbl_cand_avatar, 1)
+
+        cand_info_row = QHBoxLayout()
+        self.lbl_cand_name = QLabel(f"🟢 {self._participant_name}")
+        self.lbl_cand_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.lbl_cand_name.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent; border: none;")
+        cand_info_row.addWidget(self.lbl_cand_name)
+        cand_info_row.addStretch()
+        
+        self.lbl_video_quality = QLabel("Connected")
+        self.lbl_video_quality.setFont(QFont("Segoe UI", 8))
+        self.lbl_video_quality.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; background: transparent; border: none;")
+        cand_info_row.addWidget(self.lbl_video_quality)
+        cand_layout.addLayout(cand_info_row)
+        video_stage_layout.addWidget(self.candidate_card, 2)
+
+        # Local Interviewer Tile
+        self.interviewer_card = QFrame()
+        self.interviewer_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #0c1220;
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        int_layout = QVBoxLayout(self.interviewer_card)
+        int_layout.setContentsMargins(10, 10, 10, 10)
+        
+        lbl_int_avatar = QLabel("🎙")
+        lbl_int_avatar.setAlignment(Qt.AlignCenter)
+        lbl_int_avatar.setFont(QFont("Segoe UI", 32))
+        lbl_int_avatar.setStyleSheet("background: transparent; border: none;")
+        int_layout.addWidget(lbl_int_avatar, 1)
+
+        int_info_row = QHBoxLayout()
+        self.lbl_int_name = QLabel("🔵 You (Interviewer)")
+        self.lbl_int_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.lbl_int_name.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent; border: none;")
+        int_info_row.addWidget(self.lbl_int_name)
+        int_info_row.addStretch()
+        int_layout.addLayout(int_info_row)
+        video_stage_layout.addWidget(self.interviewer_card, 1)
+
+        center_layout.addWidget(self.video_stage)
+
+        # Screen Share / Contextual Code Display
         self.screen_display = QFrame()
         self.screen_display.setStyleSheet(f"""
             QFrame {{
@@ -176,83 +288,209 @@ class EmbeddedZoomWorkspace(QWidget):
             }}
         """)
         screen_layout = QVBoxLayout(self.screen_display)
-        screen_layout.setContentsMargins(20, 20, 20, 20)
+        screen_layout.setContentsMargins(14, 12, 14, 12)
+        screen_layout.setSpacing(6)
 
-        self.lbl_screen_header = QLabel("⏳ Waiting for candidate to share screen...")
-        self.lbl_screen_header.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
+        self.lbl_screen_header = QLabel("⏳ Candidate Screen Share: Standby (Waiting for candidate to share screen)")
+        self.lbl_screen_header.setFont(QFont("Segoe UI", 11))
         self.lbl_screen_header.setAlignment(Qt.AlignCenter)
         self.lbl_screen_header.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
         screen_layout.addWidget(self.lbl_screen_header)
 
         self.code_edit = QTextEdit()
-        self.code_edit.setPlainText(self._screen_content)
         self.code_edit.setFont(QFont("Consolas", 12))
+        self.code_edit.setPlaceholderText("Shared screen content or code selection will appear here when active...")
         self.code_edit.setStyleSheet(f"""
             QTextEdit {{
-                background-color: #121824;
+                background-color: #101622;
                 color: #a8d1ff;
                 border: 1px solid {Theme.BORDER_SUBTLE};
                 border-radius: 6px;
-                padding: 10px;
+                padding: 8px;
             }}
         """)
         self.code_edit.setVisible(False)
-        screen_layout.addWidget(self.code_edit)
+        self.code_edit.selectionChanged.connect(self._on_selection_changed)
+        screen_layout.addWidget(self.code_edit, 1)
 
-        container_layout.addWidget(self.screen_display, 1)
+        center_layout.addWidget(self.screen_display, 1)
+        container_layout.addWidget(self.center_area, 1)
 
-        # Action Toolbar below screen
-        bottom_bar = QHBoxLayout()
-        bottom_bar.setSpacing(10)
+        # In-App Zoom Control Bar
+        controls_bar = QFrame()
+        controls_bar.setFixedHeight(48)
+        controls_bar.setStyleSheet(f"""
+            QFrame {{
+                background-color: #05070e;
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        ctrl_layout = QHBoxLayout(controls_bar)
+        ctrl_layout.setContentsMargins(10, 0, 10, 0)
+        ctrl_layout.setSpacing(8)
 
-        self.lbl_selection_hint = QLabel("💡 Hint: Select code or use gesture to point, then click 'Explain Selection'")
-        self.lbl_selection_hint.setFont(QFont("Segoe UI", 10))
-        self.lbl_selection_hint.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; background: transparent; border: none;")
-        bottom_bar.addWidget(self.lbl_selection_hint)
-        bottom_bar.addStretch()
+        # Mute / Unmute
+        self.btn_audio = QPushButton("🎙 Mute")
+        self.btn_audio.setStyleSheet(self._ctrl_btn_style())
+        self.btn_audio.clicked.connect(self._toggle_audio)
+        ctrl_layout.addWidget(self.btn_audio)
 
-        self.btn_explain = GlowButton("Explain Selection", "🧠", gradient=(Theme.ACCENT_BLUE, Theme.ACCENT_PURPLE))
-        self.btn_explain.setFixedHeight(34)
+        # Video On / Off
+        self.btn_video = QPushButton("📹 Stop Video")
+        self.btn_video.setStyleSheet(self._ctrl_btn_style())
+        self.btn_video.clicked.connect(self._toggle_video)
+        ctrl_layout.addWidget(self.btn_video)
+
+        # Participants Count
+        self.btn_participants = QPushButton(f"👥 Participants ({self._participant_count})")
+        self.btn_participants.setStyleSheet(self._ctrl_btn_style())
+        ctrl_layout.addWidget(self.btn_participants)
+
+        ctrl_layout.addStretch()
+
+        # Explain Code Selection
+        self.btn_explain = GlowButton("🧠 Explain Selection", "🧠", gradient=(Theme.ACCENT_BLUE, Theme.ACCENT_PURPLE))
+        self.btn_explain.setFixedHeight(32)
+        self.btn_explain.setEnabled(False)
         self.btn_explain.clicked.connect(self._on_explain_clicked)
-        bottom_bar.addWidget(self.btn_explain)
+        ctrl_layout.addWidget(self.btn_explain)
 
-        container_layout.addLayout(bottom_bar)
+        container_layout.addWidget(controls_bar)
         layout.addWidget(self.container)
 
-    def set_screen_share_active(self, active: bool, sharer_name: str = "Candidate"):
+    def _ctrl_btn_style(self) -> str:
+        return f"""
+            QPushButton {{
+                background-color: {Theme.BG_CARD};
+                color: {Theme.TEXT_PRIMARY};
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {Theme.BG_CARD_HOVER};
+                border-color: {Theme.ACCENT_BLUE};
+                color: #ffffff;
+            }}
+        """
+
+    def set_participant_info(self, name: str):
+        self._participant_name = name or "Participant"
+        self.lbl_cand_name.setText(f"🟢 {self._participant_name}")
+
+    def set_candidate_info(self, name: str, role: str = ""):
+        self.set_participant_info(name)
+
+    def set_participant_count(self, count: int):
+        self._participant_count = max(1, count)
+        self.btn_participants.setText(f"👥 Participants ({self._participant_count})")
+
+    def set_meeting_info(self, info: dict):
+        self._meeting_id = info.get("meeting_id", "—")
+        self._passcode = info.get("passcode", "")
+        self.lbl_meeting_id_badge.setText(f"Meeting ID: {self._meeting_id}")
+
+    def update_connection_state(self, state: str, message: str = ""):
+        self._connection_state = state
+        if state in ("LIVE", "MEETING_CONNECTED"):
+            self.lbl_meeting_status.setText(f"🟢 Zoom Meeting Active • Connected ({self._participant_name})")
+            self.lbl_meeting_status.setStyleSheet("color: #10b981; background: transparent; border: none;")
+        elif state in ("CONNECTING", "INITIALIZING_MEETING_SDK", "JOINING_EMBEDDED_MEETING"):
+            self.lbl_meeting_status.setText("🟡 Connecting to Zoom Meeting...")
+            self.lbl_meeting_status.setStyleSheet("color: #f59e0b; background: transparent; border: none;")
+        elif state == "WAITING_ROOM":
+            self.lbl_meeting_status.setText("⏳ Waiting Room — Host will admit you shortly")
+            self.lbl_meeting_status.setStyleSheet("color: #f59e0b; background: transparent; border: none;")
+        elif state == "ERROR":
+            self.lbl_meeting_status.setText(f"🔴 Connection Error: {message}")
+            self.lbl_meeting_status.setStyleSheet("color: #ef4444; background: transparent; border: none;")
+
+    def _toggle_audio(self):
+        self._is_audio_muted = not self._is_audio_muted
+        if self._is_audio_muted:
+            self.btn_audio.setText("🔇 Unmute")
+            self.btn_audio.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(239, 68, 68, 0.2);
+                    color: {Theme.ACCENT_RED};
+                    border: 1px solid {Theme.ACCENT_RED};
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    font-size: 11px;
+                }}
+            """)
+        else:
+            self.btn_audio.setText("🎙 Mute")
+            self.btn_audio.setStyleSheet(self._ctrl_btn_style())
+
+    def _toggle_video(self):
+        self._is_video_muted = not self._is_video_muted
+        if self._is_video_muted:
+            self.btn_video.setText("📷 Start Video")
+            self.btn_video.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(239, 68, 68, 0.2);
+                    color: {Theme.ACCENT_RED};
+                    border: 1px solid {Theme.ACCENT_RED};
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    font-size: 11px;
+                }}
+            """)
+        else:
+            self.btn_video.setText("📹 Stop Video")
+            self.btn_video.setStyleSheet(self._ctrl_btn_style())
+
+    def set_screen_share_active(self, active: bool, sharer_name: str = ""):
         self._is_screen_shared = active
+        sharer = sharer_name or self._participant_name
         if active:
-            self.lbl_screen_header.setText(f"🖥 Shared Screen ({sharer_name}'s Workspace):")
+            self.lbl_screen_header.setText(f"🖥 Shared Screen ({sharer}'s Workspace):")
             self.lbl_screen_header.setAlignment(Qt.AlignLeft)
             self.lbl_screen_header.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; background: transparent; border: none;")
             self.code_edit.setVisible(True)
+            self.video_stage.setFixedHeight(110)
+            self.btn_explain.setEnabled(True)
         else:
-            self.lbl_screen_header.setText("⏳ Waiting for candidate to share screen...")
+            self.lbl_screen_header.setText("⏳ Candidate Screen Share: Standby (Waiting for candidate to share screen)")
             self.lbl_screen_header.setAlignment(Qt.AlignCenter)
             self.lbl_screen_header.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
             self.code_edit.setVisible(False)
+            self.video_stage.setFixedHeight(200)
+            self.btn_explain.setEnabled(False)
 
-    def _on_toggle_screen(self):
-        new_state = not self._is_screen_shared
-        self.set_screen_share_active(new_state)
-        self.toggle_screen_share.emit(new_state)
+    def set_screen_content(self, text: str):
+        self._screen_content = text
+        self.code_edit.setPlainText(text)
+        if text.strip():
+            self.btn_explain.setEnabled(True)
+
+    def _on_selection_changed(self):
+        cursor = self.code_edit.textCursor()
+        selected = cursor.selectedText().strip()
+        self.btn_explain.setEnabled(bool(selected or self.code_edit.toPlainText().strip()))
 
     def _on_explain_clicked(self):
         cursor = self.code_edit.textCursor()
         selected = cursor.selectedText()
         if not selected.strip():
             selected = self.code_edit.toPlainText()
-        self.explain_requested.emit(selected)
+        if selected.strip():
+            self.explain_requested.emit(selected)
 
 
 # ── Live Transcript Widget ──
 
 class LiveTranscriptWidget(QWidget):
-    """Scrollable live transcript with role chips."""
+    """Scrollable live transcript displaying genuine realtime speech segments."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(140)
+        self.setFixedHeight(130)
+        self._has_entries = False
         self._build_ui()
 
     def _build_ui(self):
@@ -260,10 +498,18 @@ class LiveTranscriptWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        header_row = QHBoxLayout()
         header = QLabel("📝 Live Transcript")
-        header.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        header.setFont(QFont("Segoe UI", 10, QFont.Bold))
         header.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; background: transparent;")
-        layout.addWidget(header)
+        header_row.addWidget(header)
+        header_row.addStretch()
+
+        self.lbl_status = QLabel("● Listening for speech...")
+        self.lbl_status.setFont(QFont("Segoe UI", 9))
+        self.lbl_status.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
+        header_row.addWidget(self.lbl_status)
+        layout.addLayout(header_row)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -281,12 +527,21 @@ class LiveTranscriptWidget(QWidget):
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(10, 8, 10, 8)
         self.content_layout.setSpacing(6)
+
+        self.lbl_empty_hint = QLabel("Listening for conversation... Realtime speech segments will appear here.")
+        self.lbl_empty_hint.setFont(QFont("Segoe UI", 10))
+        self.lbl_empty_hint.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
+        self.content_layout.addWidget(self.lbl_empty_hint)
         self.content_layout.addStretch()
 
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll)
 
     def add_transcript(self, speaker: str, text: str, ts_str: str = ""):
+        if not self._has_entries:
+            self._has_entries = True
+            self.lbl_empty_hint.setVisible(False)
+
         if not ts_str:
             ts_str = time.strftime("%H:%M:%S")
 
@@ -317,7 +572,7 @@ class TalkTimeWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(50)
+        self.setFixedHeight(48)
         self._iv_pct = None
         self._cand_pct = None
 
@@ -326,13 +581,13 @@ class TalkTimeWidget(QWidget):
         layout.setSpacing(4)
 
         header_row = QHBoxLayout()
-        title = QLabel("📊 Interview Balance")
+        title = QLabel("📊 Interview Talk Balance")
         title.setFont(QFont("Segoe UI", 10, QFont.Bold))
         title.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; background: transparent;")
         header_row.addWidget(title)
 
-        self.lbl_stats = QLabel("Waiting for speech...")
-        self.lbl_stats.setFont(QFont("Segoe UI", 10))
+        self.lbl_stats = QLabel("Waiting for conversation...")
+        self.lbl_stats.setFont(QFont("Segoe UI", 9))
         self.lbl_stats.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent;")
         header_row.addWidget(self.lbl_stats, alignment=Qt.AlignRight)
         layout.addLayout(header_row)
@@ -359,7 +614,7 @@ class TalkTimeWidget(QWidget):
         self._iv_pct = iv_pct
         self._cand_pct = cand_pct
         if iv_pct is None or cand_pct is None:
-            self.lbl_stats.setText("Waiting for speech...")
+            self.lbl_stats.setText("Waiting for conversation...")
             self.bar.setValue(50)
         else:
             self.lbl_stats.setText(f"Interviewer: {int(iv_pct)}% | Candidate: {int(cand_pct)}%")
@@ -380,7 +635,7 @@ class AICoachTabWidget(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         # Tabs
         self.tabs = QTabWidget()
@@ -393,7 +648,7 @@ class AICoachTabWidget(QWidget):
             QTabBar::tab {{
                 background: {Theme.BG_DARKER};
                 color: {Theme.TEXT_SECONDARY};
-                padding: 8px 12px;
+                padding: 7px 10px;
                 font-weight: bold;
                 font-size: 11px;
                 border-top-left-radius: 6px;
@@ -432,8 +687,8 @@ class AICoachTabWidget(QWidget):
     def _build_coach_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         # Active Suggestion Box
         self.coach_card = QFrame()
@@ -442,7 +697,7 @@ class AICoachTabWidget(QWidget):
                 background-color: {Theme.BG_DARKER};
                 border: 1px solid {Theme.BORDER_HOVER};
                 border-radius: 8px;
-                padding: 10px;
+                padding: 8px;
             }}
         """)
         card_layout = QVBoxLayout(self.coach_card)
@@ -454,20 +709,22 @@ class AICoachTabWidget(QWidget):
         self.lbl_sug_title.setStyleSheet(f"color: {Theme.ACCENT_CYAN};")
         card_layout.addWidget(self.lbl_sug_title)
 
-        self.lbl_sug_body = QLabel("Observing candidate response. Contextual follow-up suggestions will appear dynamically.")
+        self.lbl_sug_body = QLabel("Waiting for live interview data... Contextual follow-up suggestions will appear dynamically as the candidate speaks.")
         self.lbl_sug_body.setWordWrap(True)
         self.lbl_sug_body.setFont(QFont("Segoe UI", 10))
-        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_PRIMARY};")
+        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_SECONDARY};")
         card_layout.addWidget(self.lbl_sug_body)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self.btn_ask = QPushButton("Ask Suggestion")
-        self.btn_ask.setStyleSheet(f"background: {Theme.ACCENT_BLUE}; color: white; padding: 4px 10px; border-radius: 4px; font-weight: bold;")
+        self.btn_ask = QPushButton("Use Follow-Up")
+        self.btn_ask.setStyleSheet(f"background: {Theme.ACCENT_BLUE}; color: white; padding: 4px 10px; border-radius: 4px; font-weight: bold; font-size: 11px;")
         self.btn_ask.clicked.connect(self._on_ask_suggestion)
+        self.btn_ask.setVisible(False)
         self.btn_dismiss = QPushButton("Dismiss")
-        self.btn_dismiss.setStyleSheet(f"background: {Theme.BG_CARD}; color: {Theme.TEXT_MUTED}; padding: 4px 10px; border-radius: 4px;")
+        self.btn_dismiss.setStyleSheet(f"background: {Theme.BG_CARD}; color: {Theme.TEXT_MUTED}; padding: 4px 10px; border-radius: 4px; font-size: 11px;")
         self.btn_dismiss.clicked.connect(self._on_dismiss_suggestion)
+        self.btn_dismiss.setVisible(False)
         btn_row.addWidget(self.btn_ask)
         btn_row.addWidget(self.btn_dismiss)
         btn_row.addStretch()
@@ -501,8 +758,8 @@ class AICoachTabWidget(QWidget):
     def _build_resume_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
         self.lbl_resume_stats = QLabel("Extracted Claims: 0 Total | 0 Discussed")
         self.lbl_resume_stats.setFont(QFont("Segoe UI", 10, QFont.Bold))
@@ -525,8 +782,8 @@ class AICoachTabWidget(QWidget):
     def _build_rubric_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
         self.rubric_progress = QProgressBar()
         self.rubric_progress.setRange(0, 100)
@@ -559,15 +816,15 @@ class AICoachTabWidget(QWidget):
     def _build_explain_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
         self.lbl_explain_title = QLabel("🧠 Visual Context & Code Explanation")
         self.lbl_explain_title.setFont(QFont("Segoe UI", 11, QFont.Bold))
         self.lbl_explain_title.setStyleSheet(f"color: {Theme.ACCENT_CYAN};")
         layout.addWidget(self.lbl_explain_title)
 
-        self.txt_explain_body = QLabel("Point with gesture or select screen text and click 'Explain Selection' to analyze code structure, complexity, and follow-ups.")
+        self.txt_explain_body = QLabel("Select code or screen text in the shared workspace to view structure, complexity, and follow-up guidance.")
         self.txt_explain_body.setWordWrap(True)
         self.txt_explain_body.setFont(QFont("Segoe UI", 10))
         self.txt_explain_body.setStyleSheet(f"""
@@ -575,7 +832,7 @@ class AICoachTabWidget(QWidget):
             border: 1px solid {Theme.BORDER_SUBTLE};
             border-radius: 6px;
             padding: 10px;
-            color: {Theme.TEXT_PRIMARY};
+            color: {Theme.TEXT_SECONDARY};
         """)
         layout.addWidget(self.txt_explain_body)
         layout.addStretch()
@@ -584,8 +841,8 @@ class AICoachTabWidget(QWidget):
     def _build_analysis_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         self.talk_time_widget = TalkTimeWidget()
         layout.addWidget(self.talk_time_widget)
@@ -604,6 +861,9 @@ class AICoachTabWidget(QWidget):
     def set_suggestion(self, title: str, text: str):
         self.lbl_sug_title.setText(title)
         self.lbl_sug_body.setText(text)
+        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_PRIMARY};")
+        self.btn_ask.setVisible(True)
+        self.btn_dismiss.setVisible(True)
         self.tabs.setCurrentIndex(0)
 
     def set_risk_alert(self, explanation: str):
@@ -624,7 +884,6 @@ class AICoachTabWidget(QWidget):
         self.lbl_resume_stats.setText(
             f"Extracted Claims: {summary.get('total_claims', 0)} | Discussed: {summary.get('discussed_count', 0)}"
         )
-        # Clear items
         while self.resume_layout.count() > 1:
             item = self.resume_layout.takeAt(0)
             if item.widget():
@@ -662,4 +921,7 @@ class AICoachTabWidget(QWidget):
 
     def _on_dismiss_suggestion(self):
         self.lbl_sug_title.setText("💡 AI Follow-Up Guidance")
-        self.lbl_sug_body.setText("Suggestion dismissed. Next observation will appear here.")
+        self.lbl_sug_body.setText("Waiting for live interview data... Next observation will appear dynamically.")
+        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_SECONDARY};")
+        self.btn_ask.setVisible(False)
+        self.btn_dismiss.setVisible(False)

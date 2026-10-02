@@ -300,11 +300,11 @@ class InterviewController(QObject):
         # Zoom Meeting SDK & Auth
         auth_status = self.zoom_auth.check_authorization_status()
         if auth_status["sdk_configured"]:
-            result.add("Zoom Meeting SDK", True, "Zoom SDK credentials verified")
+            result.add("Zoom Embedded Meeting", True, "Zoom Meeting SDK credentials verified for embedded session")
             self.metrics.set_service_status("zoom_adapter", "ready")
         else:
-            result.add("Zoom Meeting SDK", True, "SDK credentials not set in .env — Companion launch mode ready", degraded=True)
-            self.metrics.set_service_status("zoom_adapter", "companion_mode")
+            result.add("Zoom Embedded Meeting", True, "Meeting SDK credentials missing — Configuration required for embedded session", degraded=True)
+            self.metrics.set_service_status("zoom_adapter", "config_required")
 
         # Zoom RTMS
         if auth_status["rtms_configured"]:
@@ -312,7 +312,7 @@ class InterviewController(QObject):
             self.metrics.set_service_status("zoom_rtms", "ready")
         else:
             result.add("Zoom RTMS", True, "RTMS credentials not set — Local audio/transcript tap active", degraded=True)
-            self.metrics.set_service_status("zoom_rtms", "companion_mode")
+            self.metrics.set_service_status("zoom_rtms", "local_stream")
 
         # Camera
         if engine and hasattr(engine, 'is_running') and engine.is_running:
@@ -700,10 +700,16 @@ class InterviewController(QObject):
         def _gen():
             try:
                 report = self._build_report()
-                self.report_ready.emit(report)
+                try:
+                    self.report_ready.emit(report)
+                except RuntimeError:
+                    pass
             except Exception as e:
                 logger.exception(f"[InterviewController] Report generation failed: {e}")
-                self.error_occurred.emit("Report Failed", str(e))
+                try:
+                    self.error_occurred.emit("Report Failed", str(e))
+                except RuntimeError:
+                    pass
 
         threading.Thread(target=_gen, daemon=True).start()
 

@@ -12,6 +12,7 @@ class Theme:
     BG_DARK = "#151721"
     BG_CARD = "#1a1d2e"
     BG_CARD_HOVER = "#1f2337"
+    BG_HOVER = "#1f2337"
     BG_ELEVATED = "#222640"
     BG_INPUT = "#12131c"
 
