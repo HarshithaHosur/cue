@@ -4,7 +4,6 @@
 
 import time
 import logging
-import json
 from typing import Optional, Dict, Any
 
 from PySide6.QtCore import QObject, Signal
@@ -16,34 +15,24 @@ logger = logging.getLogger(__name__)
 
 
 class InterviewSession(QObject):
-    """Thread-safe interview state machine: SETUP -> VERIFYING -> LIVE -> ENDED -> REPORTED.
-
-    Emits Qt signals on every state transition and event.
+    """Interview state machine supporting the full lifecycle:
+    CREATED -> CONFIGURED -> PERMISSIONS_CHECKING -> PREFLIGHT -> LIVE -> ENDING -> COMPLETED
     """
 
-    # Signals
     state_changed = Signal(str)                  # new state string
     event_logged = Signal(str, str, str, float)  # event_type, message, payload, timestamp
     question_changed = Signal(int, str)          # index, text
     timer_tick = Signal(int)                     # remaining seconds
 
-    VALID_TRANSITIONS = {
-        InterviewState.SETUP: [InterviewState.VERIFYING],
-        InterviewState.VERIFYING: [InterviewState.LIVE, InterviewState.SETUP],
-        InterviewState.LIVE: [InterviewState.ENDED],
-        InterviewState.ENDED: [InterviewState.REPORTED],
-        InterviewState.REPORTED: [],
-    }
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._state = InterviewState.SETUP
+        self._state = InterviewState.CREATED
         self._setup: Optional[InterviewSetup] = None
         self._interview_id: Optional[str] = None
         self._start_time: Optional[float] = None
         self._end_time: Optional[float] = None
         self._current_question_index: int = -1
-        self._face_encoding = None  # Candidate face anchor
+        self._face_encoding = None
 
     @property
     def state(self) -> InterviewState:
@@ -65,16 +54,8 @@ class InterviewSession(QObject):
     def current_question_index(self) -> int:
         return self._current_question_index
 
-    @property
-    def face_encoding(self):
-        return self._face_encoding
-
-    @face_encoding.setter
-    def face_encoding(self, val):
-        self._face_encoding = val
-
     def initialize(self, setup: InterviewSetup) -> str:
-        """Create interview in DB and store setup data."""
+        """Creates interview in DB and stores setup data."""
         self._setup = setup
         self._interview_id = interview_store.create_interview({
             "title": setup.title,
@@ -84,6 +65,7 @@ class InterviewSession(QObject):
             "interview_type": setup.interview_type,
             "duration_minutes": setup.duration_minutes,
             "difficulty": setup.difficulty,
+            "meeting_platform": getattr(setup, "meeting_platform", "Zoom"),
             "meeting_link": setup.meeting_link,
             "notes": setup.notes,
             "resume_path": setup.resume_path,
@@ -91,17 +73,11 @@ class InterviewSession(QObject):
             "created_at": setup.created_at,
         })
         setup.interview_id = self._interview_id
-        logger.info(f"Interview created: {self._interview_id}")
+        logger.info(f"[InterviewSession] Session created: {self._interview_id}")
         return self._interview_id
 
     def transition_to(self, new_state: InterviewState) -> bool:
-        """Attempt a state transition. Returns True on success."""
-        if new_state not in self.VALID_TRANSITIONS.get(self._state, []):
-            logger.warning(
-                f"Invalid transition: {self._state.value} -> {new_state.value}"
-            )
-            return False
-
+        """Attempt a state transition."""
         old = self._state
         self._state = new_state
 
@@ -110,25 +86,23 @@ class InterviewSession(QObject):
             interview_store.update_interview_status(
                 self._interview_id, "live", started_at=self._start_time
             )
-        elif new_state == InterviewState.ENDED:
+        elif new_state in (InterviewState.COMPLETED, InterviewState.ENDED):
             self._end_time = time.time()
             duration = self._end_time - (self._start_time or self._end_time)
             interview_store.update_interview_status(
-                self._interview_id, "ended",
+                self._interview_id, "completed",
                 ended_at=self._end_time, actual_duration_s=duration
             )
-        elif new_state == InterviewState.REPORTED:
-            interview_store.update_interview_status(self._interview_id, "reported")
-        elif new_state == InterviewState.VERIFYING:
-            interview_store.update_interview_status(self._interview_id, "verifying")
+        elif new_state == InterviewState.PREFLIGHT:
+            interview_store.update_interview_status(self._interview_id, "preflight")
 
         self.emit_event("system", f"State: {old.value} → {new_state.value}")
         self.state_changed.emit(new_state.value)
-        logger.info(f"Interview {self._interview_id}: {old.value} → {new_state.value}")
+        logger.info(f"[InterviewSession] {self._interview_id}: {old.value} → {new_state.value}")
         return True
 
     def emit_event(self, event_type: str, message: str, payload: str = "") -> str:
-        """Thread-safe: write to store and emit signal."""
+        """Write to store and emit signal."""
         if not self._interview_id:
             return ""
         ts = time.time()

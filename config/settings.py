@@ -62,3 +62,12 @@ MONGO_DB = os.getenv("MONGO_DB", "intent_platform")
 # ── Gemini ──
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
+# ── Zoom Meeting SDK & RTMS ──
+ZOOM_CLIENT_ID = os.getenv("ZOOM_CLIENT_ID", "")
+ZOOM_CLIENT_SECRET = os.getenv("ZOOM_CLIENT_SECRET", "")
+ZOOM_ACCOUNT_ID = os.getenv("ZOOM_ACCOUNT_ID", "")
+ZOOM_SDK_KEY = os.getenv("ZOOM_SDK_KEY", ZOOM_CLIENT_ID)
+ZOOM_SDK_SECRET = os.getenv("ZOOM_SDK_SECRET", ZOOM_CLIENT_SECRET)
+ZOOM_RTMS_CLIENT_ID = os.getenv("ZOOM_RTMS_CLIENT_ID", ZOOM_CLIENT_ID)
+ZOOM_RTMS_CLIENT_SECRET = os.getenv("ZOOM_RTMS_CLIENT_SECRET", ZOOM_CLIENT_SECRET)

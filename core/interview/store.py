@@ -42,6 +42,7 @@ class InterviewStore:
                     interview_type TEXT DEFAULT 'Technical',
                     duration_minutes INTEGER DEFAULT 45,
                     difficulty TEXT DEFAULT 'Medium',
+                    meeting_platform TEXT DEFAULT 'Zoom',
                     meeting_link TEXT DEFAULT '',
                     notes TEXT DEFAULT '',
                     resume_path TEXT DEFAULT '',
@@ -52,6 +53,11 @@ class InterviewStore:
                     actual_duration_s REAL DEFAULT 0
                 )
             ''')
+            # Check for existing table migration
+            try:
+                c.execute("ALTER TABLE interviews ADD COLUMN meeting_platform TEXT DEFAULT 'Zoom'")
+            except sqlite3.OperationalError:
+                pass
             c.execute('''
                 CREATE TABLE IF NOT EXISTS interview_events (
                     event_id TEXT PRIMARY KEY,
@@ -72,10 +78,15 @@ class InterviewStore:
                     text TEXT DEFAULT '',
                     duration REAL DEFAULT 0,
                     question_index INTEGER DEFAULT -1,
+                    confidence REAL DEFAULT 1.0,
                     timestamp REAL,
                     FOREIGN KEY (interview_id) REFERENCES interviews(interview_id)
                 )
             ''')
+            try:
+                c.execute("ALTER TABLE interview_transcript ADD COLUMN confidence REAL DEFAULT 1.0")
+            except sqlite3.OperationalError:
+                pass
             c.execute('''
                 CREATE TABLE IF NOT EXISTS interview_questions (
                     question_id TEXT PRIMARY KEY,
@@ -102,6 +113,58 @@ class InterviewStore:
                 )
             ''')
             c.execute('''
+                CREATE TABLE IF NOT EXISTS interview_rubric_items (
+                    item_id TEXT PRIMARY KEY,
+                    interview_id TEXT NOT NULL,
+                    criterion_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    state TEXT DEFAULT 'NOT_STARTED',
+                    evidence_count INTEGER DEFAULT 0,
+                    updated_at REAL,
+                    FOREIGN KEY (interview_id) REFERENCES interviews(interview_id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS interview_resume_claims (
+                    claim_id TEXT PRIMARY KEY,
+                    interview_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    keywords_json TEXT DEFAULT '[]',
+                    status TEXT DEFAULT 'UNEXPLORED',
+                    evidence_snippet TEXT DEFAULT '',
+                    evidence_timestamp REAL,
+                    FOREIGN KEY (interview_id) REFERENCES interviews(interview_id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS interview_suggestions (
+                    suggestion_id TEXT PRIMARY KEY,
+                    interview_id TEXT NOT NULL,
+                    suggestion_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    reason TEXT DEFAULT '',
+                    priority TEXT DEFAULT 'medium',
+                    status TEXT DEFAULT 'active',
+                    timestamp REAL,
+                    FOREIGN KEY (interview_id) REFERENCES interviews(interview_id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS interview_visual_selections (
+                    selection_id TEXT PRIMARY KEY,
+                    interview_id TEXT NOT NULL,
+                    selected_text TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    complexity TEXT DEFAULT '',
+                    follow_up TEXT DEFAULT '',
+                    timestamp REAL,
+                    FOREIGN KEY (interview_id) REFERENCES interviews(interview_id)
+                )
+            ''')
+            c.execute('''
                 CREATE TABLE IF NOT EXISTS interview_reports (
                     report_id TEXT PRIMARY KEY,
                     interview_id TEXT NOT NULL,
@@ -120,9 +183,9 @@ class InterviewStore:
             c.execute('''
                 INSERT INTO interviews
                 (interview_id, title, candidate_name, candidate_email, job_role,
-                 interview_type, duration_minutes, difficulty, meeting_link, notes,
-                 resume_path, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 interview_type, duration_minutes, difficulty, meeting_platform,
+                 meeting_link, notes, resume_path, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 iid,
                 data.get("title", ""),
@@ -132,6 +195,7 @@ class InterviewStore:
                 data.get("interview_type", "Technical"),
                 data.get("duration_minutes", 45),
                 data.get("difficulty", "Medium"),
+                data.get("meeting_platform", "Zoom"),
                 data.get("meeting_link", ""),
                 data.get("notes", ""),
                 data.get("resume_path", ""),
@@ -213,17 +277,17 @@ class InterviewStore:
 
     # ── Transcript ──
     def add_transcript(self, interview_id: str, speaker: str, text: str,
-                       duration: float = 0, question_index: int = -1,
-                       timestamp: Optional[float] = None) -> str:
+                        duration: float = 0, question_index: int = -1,
+                        confidence: float = 1.0, timestamp: Optional[float] = None) -> str:
         eid = str(uuid.uuid4())
         ts = timestamp or time.time()
         with self._conn() as conn:
             c = conn.cursor()
             c.execute('''
                 INSERT INTO interview_transcript
-                (entry_id, interview_id, speaker, text, duration, question_index, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (eid, interview_id, speaker, text, duration, question_index, ts))
+                (entry_id, interview_id, speaker, text, duration, question_index, confidence, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (eid, interview_id, speaker, text, duration, question_index, confidence, ts))
             conn.commit()
         return eid
 
@@ -291,6 +355,63 @@ class InterviewStore:
             c = conn.cursor()
             c.execute(
                 "SELECT * FROM interview_notes WHERE interview_id = ? ORDER BY timestamp ASC",
+                (interview_id,)
+            )
+            return [dict(r) for r in c.fetchall()]
+
+    # ── Resume Claims ──
+    def save_resume_claims(self, interview_id: str, claims: List[Dict[str, Any]]):
+        with self._conn() as conn:
+            c = conn.cursor()
+            for cl in claims:
+                cid = cl.get("claim_id") or str(uuid.uuid4())
+                kw_json = json.dumps(cl.get("keywords", []))
+                c.execute('''
+                    INSERT OR REPLACE INTO interview_resume_claims
+                    (claim_id, interview_id, category, text, keywords_json, status, evidence_snippet, evidence_timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    cid, interview_id, cl.get("category", "skill"), cl.get("text", ""),
+                    kw_json, cl.get("status", "UNEXPLORED"),
+                    cl.get("evidence_snippet", ""), cl.get("evidence_timestamp")
+                ))
+            conn.commit()
+
+    def get_resume_claims(self, interview_id: str) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT * FROM interview_resume_claims WHERE interview_id = ?", (interview_id,))
+            rows = c.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["keywords"] = json.loads(d.get("keywords_json", "[]"))
+                results.append(d)
+            return results
+
+    # ── Visual Selections ──
+    def add_visual_selection(self, interview_id: str, selected_text: str, explanation: str,
+                             complexity: str = "", follow_up: str = "",
+                             timestamp: Optional[float] = None) -> str:
+        sid = str(uuid.uuid4())
+        ts = timestamp or time.time()
+        with self._conn() as conn:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO interview_visual_selections
+                (selection_id, interview_id, selected_text, explanation, complexity, follow_up, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (sid, interview_id, selected_text, explanation, complexity, follow_up, ts))
+            conn.commit()
+        return sid
+
+    def get_visual_selections(self, interview_id: str) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute(
+                "SELECT * FROM interview_visual_selections WHERE interview_id = ? ORDER BY timestamp ASC",
                 (interview_id,)
             )
             return [dict(r) for r in c.fetchall()]
