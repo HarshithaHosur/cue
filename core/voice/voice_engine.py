@@ -249,7 +249,7 @@ class VoiceEngine:
             if self.on_command_detected:
                 self.on_command_detected(raw_text, "AI Agent Activated")
             return
-        elif any(deact in eval_text for act in ("deactivate agent", "stop assistant", "sleep agent", "stop agent", "dismiss agent")):
+        elif any(act in eval_text for act in ("deactivate agent", "stop assistant", "sleep agent", "stop agent", "dismiss agent")):
             self._agent_controller.deactivate(source="voice")
             self.speak("AI Agent Deactivated")
             if self.on_command_detected:

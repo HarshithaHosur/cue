@@ -10,9 +10,10 @@ import numpy as np
 from typing import Optional, List, Tuple, Dict, Any
 
 try:
+    import face_recognition_models
     import face_recognition
     FACE_REC_AVAILABLE = True
-except ImportError:
+except (ImportError, SystemExit):
     FACE_REC_AVAILABLE = False
 
 from intent_platform.database.connection import db

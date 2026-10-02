@@ -18,9 +18,10 @@ except ImportError:
     MP_AVAILABLE = False
 
 try:
+    import face_recognition_models
     import face_recognition
     FACE_REC_AVAILABLE = True
-except ImportError:
+except (ImportError, SystemExit):
     FACE_REC_AVAILABLE = False
 
 from intent_platform.core.auth.face_auth import FaceAuthManager
