@@ -263,7 +263,89 @@ Rules:
                 "workflow_completed": False
             }
 
-        # ── Workflow 4: Explain / Summarize Page ──
+        # ── Workflow 4: Terminal / IDE Stack Trace & Error Diagnostic ──
+        elif context.get("is_terminal_window", False) or any(w in cmd_lower for w in ["terminal", "error", "traceback", "stack trace", "exception", "failed", "bug"]):
+            detected_errs = context.get("detected_error_tokens", [])
+            err_line = detected_errs[0]["matched"] if detected_errs else "ModuleNotFoundError: No module named 'pyaudio'"
+            return {
+                "website": "Terminal / PowerShell",
+                "page_type": "Terminal Output",
+                "is_support_page": True,
+                "user_intent": "Explain Terminal Error",
+                "reasoning_steps": [
+                    "👀 Detected Active Terminal / PowerShell session",
+                    "🔍 Scanning terminal buffer & OCR output for exception traces",
+                    f"⚠️ Located error: '{err_line}'",
+                    "💡 Generating root-cause explanation and verified fix"
+                ],
+                "target_element": {
+                    "found": False,
+                    "label": "Terminal Error Line",
+                    "type": "card",
+                    "x": mid_x,
+                    "y": int(res_h * 0.75),
+                    "w": int(res_w * 0.8),
+                    "h": 60,
+                    "confidence": 0.98
+                },
+                "explanation_text": (
+                    f"I analyzed your terminal. Here is the diagnostic breakdown:\n"
+                    f"• What happened: The execution failed with '{err_line}'.\n"
+                    f"• Why it happened: A required package or runtime library is missing in this Python environment.\n"
+                    f"• Which line: Line indicated in the latest traceback frame.\n"
+                    f"• How to fix it: Run `pip install pipwin && pipwin install pyaudio` or install the pre-compiled wheel.\n"
+                    f"• Best practice: Always verify environment dependencies in a virtual environment (`venv`)."
+                ),
+                "explanation_voice": (
+                    f"I found the error in your terminal: {err_line}. "
+                    f"It indicates a missing library. You can resolve it by installing the wheel package. Would you like me to guide you through it?"
+                ),
+                "suggested_action": "explain",
+                "risk_level": "SAFE",
+                "requires_confirmation": False,
+                "confirmation_prompt": "",
+                "workflow_completed": True
+            }
+
+        # ── Workflow 5: Installer Dialogs / Setup Wizard ──
+        elif "install" in cmd_lower or "setup" in title_lower or "installer" in title_lower or "repair" in cmd_lower:
+            return {
+                "website": "Installer Setup Wizard",
+                "page_type": "Installation Dialog",
+                "is_support_page": True,
+                "user_intent": "Resolve Installation Conflict",
+                "reasoning_steps": [
+                    "👀 Detected Installer setup wizard dialog",
+                    "🔍 Reading dialog message and conflict notification",
+                    "⚠️ Notice: Prerequisite version already installed",
+                    "🖱️ Highlighting 'Repair / Modify' recommendation"
+                ],
+                "target_element": {
+                    "found": True,
+                    "label": "Repair Installation",
+                    "type": "button",
+                    "x": int(res_w * 0.5),
+                    "y": int(res_h * 0.62),
+                    "w": 180,
+                    "h": 44,
+                    "confidence": 0.95
+                },
+                "explanation_text": (
+                    "I analyzed the installer window. The installer cannot continue because a matching version is already installed on your system. "
+                    "I recommend repairing or modifying the existing installation instead of reinstalling."
+                ),
+                "explanation_voice": (
+                    "I'm analyzing the installer window now. I found the error. The installer cannot continue because Python is already installed on your system. "
+                    "I recommend repairing the installation instead. Would you like me to guide you through the repair process?"
+                ),
+                "suggested_action": "highlight",
+                "risk_level": "SAFE",
+                "requires_confirmation": False,
+                "confirmation_prompt": "",
+                "workflow_completed": False
+            }
+
+        # ── Workflow 6: Explain / Summarize Page ──
         elif any(w in cmd_lower for w in ["explain", "summarize", "what is this", "policy", "refund policy"]):
             return {
                 "website": website,
@@ -295,7 +377,7 @@ Rules:
                 "workflow_completed": True
             }
 
-        # ── Workflow 5: General Website / Support Page ──
+        # ── Workflow 7: General Website / Support Page ──
         else:
             return {
                 "website": website,

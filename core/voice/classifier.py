@@ -122,7 +122,14 @@ TRAINING_CORPUS = {
         'my order arrived cold', 'my order is delayed', 'wrong product',
         'download my statement', 'download statement', 'help me with this order',
         'replace this', 'return this', 'what is this page',
-        'order is wrong', 'damaged product', 'complaint about my order'
+        'order is wrong', 'damaged product', 'complaint about my order',
+        # Technical Support Executive Triggers
+        'install python', 'install vs code', 'install git', 'install java',
+        'install node', 'install docker', 'install software', 'download installer',
+        'explain this error', 'explain error', 'why did this fail', 'fix this error',
+        'terminal error', 'what is this error', 'check my wifi', 'wifi not working',
+        'my wifi is not working', 'troubleshoot wifi', 'no internet', 'network diagnostics',
+        'check my battery', 'check battery', 'battery health', 'battery status'
     ]
 }
 
