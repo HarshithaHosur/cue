@@ -102,13 +102,13 @@ class ReportGenerator:
 
         report = {
             "interview_details": {
-                "candidate_name": setup.get("candidate_name", "Candidate"),
-                "candidate_email": setup.get("candidate_email", ""),
-                "job_role": setup.get("job_role", "Software Engineer"),
-                "interview_type": setup.get("interview_type", "Technical"),
-                "difficulty": setup.get("difficulty", "Medium"),
-                "meeting_platform": setup.get("meeting_platform", "Zoom"),
-                "meeting_link": setup.get("meeting_link", ""),
+                "candidate_name": setup.get("candidate_name") or "Not available",
+                "candidate_email": setup.get("candidate_email") or "Not available",
+                "job_role": setup.get("job_role") or "Not available",
+                "interview_type": setup.get("interview_type") or "Technical",
+                "difficulty": setup.get("difficulty") or "Medium",
+                "meeting_platform": setup.get("meeting_platform") or "Zoom",
+                "meeting_link": setup.get("meeting_link") or "Not available",
                 "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(setup.get("created_at", time.time()))),
                 "planned_minutes": planned_min,
                 "actual_minutes": actual_min,

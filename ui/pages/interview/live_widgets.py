@@ -122,11 +122,11 @@ class EmbeddedZoomWorkspace(QWidget):
         super().__init__(parent)
         self._meeting_id = "—"
         self._passcode = ""
-        self._participant_name = "Participant"
+        self._remote_participant_name = ""
         self._is_screen_shared = False
         self._is_audio_muted = False
         self._is_video_muted = False
-        self._participant_count = 1
+        self._participant_count = 1  # Current user is participant #1
         self._connection_state = "IDLE"
         self._screen_content = ""
         self._build_ui()
@@ -153,9 +153,9 @@ class EmbeddedZoomWorkspace(QWidget):
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
 
-        self.lbl_meeting_status = QLabel("🔵 Zoom Meeting Active • Connected")
+        self.lbl_meeting_status = QLabel("🟢 Zoom Meeting Active • 1 Participant")
         self.lbl_meeting_status.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        self.lbl_meeting_status.setStyleSheet("color: #4da6ff; background: transparent; border: none;")
+        self.lbl_meeting_status.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; background: transparent; border: none;")
         top_row.addWidget(self.lbl_meeting_status)
 
         self.lbl_security_badge = QLabel(" 🔒 E2EE 256-bit ")
@@ -217,39 +217,7 @@ class EmbeddedZoomWorkspace(QWidget):
         video_stage_layout.setContentsMargins(10, 10, 10, 10)
         video_stage_layout.setSpacing(10)
 
-        # Active Participant Tile
-        self.candidate_card = QFrame()
-        self.candidate_card.setStyleSheet(f"""
-            QFrame {{
-                background-color: #0c1220;
-                border: 1px solid {Theme.BORDER_SUBTLE};
-                border-radius: 8px;
-            }}
-        """)
-        cand_layout = QVBoxLayout(self.candidate_card)
-        cand_layout.setContentsMargins(10, 10, 10, 10)
-        
-        self.lbl_cand_avatar = QLabel("👤")
-        self.lbl_cand_avatar.setAlignment(Qt.AlignCenter)
-        self.lbl_cand_avatar.setFont(QFont("Segoe UI", 32))
-        self.lbl_cand_avatar.setStyleSheet("background: transparent; border: none;")
-        cand_layout.addWidget(self.lbl_cand_avatar, 1)
-
-        cand_info_row = QHBoxLayout()
-        self.lbl_cand_name = QLabel(f"🟢 {self._participant_name}")
-        self.lbl_cand_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        self.lbl_cand_name.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent; border: none;")
-        cand_info_row.addWidget(self.lbl_cand_name)
-        cand_info_row.addStretch()
-        
-        self.lbl_video_quality = QLabel("Connected")
-        self.lbl_video_quality.setFont(QFont("Segoe UI", 8))
-        self.lbl_video_quality.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; background: transparent; border: none;")
-        cand_info_row.addWidget(self.lbl_video_quality)
-        cand_layout.addLayout(cand_info_row)
-        video_stage_layout.addWidget(self.candidate_card, 2)
-
-        # Local Interviewer Tile
+        # 1. Local Interviewer Tile (You - Participant #1)
         self.interviewer_card = QFrame()
         self.interviewer_card.setStyleSheet(f"""
             QFrame {{
@@ -268,13 +236,50 @@ class EmbeddedZoomWorkspace(QWidget):
         int_layout.addWidget(lbl_int_avatar, 1)
 
         int_info_row = QHBoxLayout()
-        self.lbl_int_name = QLabel("🔵 You (Interviewer)")
+        self.lbl_int_name = QLabel("🔵 You (Interviewer / Host)")
         self.lbl_int_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
         self.lbl_int_name.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent; border: none;")
         int_info_row.addWidget(self.lbl_int_name)
         int_info_row.addStretch()
+        
+        lbl_int_status = QLabel("● Connected")
+        lbl_int_status.setFont(QFont("Segoe UI", 8))
+        lbl_int_status.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; background: transparent; border: none;")
+        int_info_row.addWidget(lbl_int_status)
         int_layout.addLayout(int_info_row)
         video_stage_layout.addWidget(self.interviewer_card, 1)
+
+        # 2. Remote Participant Tile (Candidate / Remote User) - Standby until joined
+        self.candidate_card = QFrame()
+        self.candidate_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #080c16;
+                border: 1px dashed {Theme.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        cand_layout = QVBoxLayout(self.candidate_card)
+        cand_layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.lbl_cand_avatar = QLabel("👤")
+        self.lbl_cand_avatar.setAlignment(Qt.AlignCenter)
+        self.lbl_cand_avatar.setFont(QFont("Segoe UI", 32))
+        self.lbl_cand_avatar.setStyleSheet("background: transparent; border: none;")
+        cand_layout.addWidget(self.lbl_cand_avatar, 1)
+
+        cand_info_row = QHBoxLayout()
+        self.lbl_cand_name = QLabel("⚪ Waiting for another participant...")
+        self.lbl_cand_name.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.lbl_cand_name.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
+        cand_info_row.addWidget(self.lbl_cand_name)
+        cand_info_row.addStretch()
+        
+        self.lbl_video_quality = QLabel("Standby")
+        self.lbl_video_quality.setFont(QFont("Segoe UI", 8))
+        self.lbl_video_quality.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
+        cand_info_row.addWidget(self.lbl_video_quality)
+        cand_layout.addLayout(cand_info_row)
+        video_stage_layout.addWidget(self.candidate_card, 1)
 
         center_layout.addWidget(self.video_stage)
 
@@ -377,9 +382,47 @@ class EmbeddedZoomWorkspace(QWidget):
             }}
         """
 
+    def add_participant(self, pid: str, name: str):
+        """Updates UI when a real remote participant joins."""
+        self._remote_participant_name = name or "Remote Participant"
+        self._participant_count = 2
+        self.candidate_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #0c1220;
+                border: 1px solid {Theme.BORDER_HOVER};
+                border-radius: 8px;
+            }}
+        """)
+        self.lbl_cand_name.setText(f"🟢 {self._remote_participant_name}")
+        self.lbl_cand_name.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent; border: none;")
+        self.lbl_video_quality.setText("● Connected")
+        self.lbl_video_quality.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; background: transparent; border: none;")
+        self.btn_participants.setText(f"👥 Participants ({self._participant_count})")
+        self.lbl_meeting_status.setText(f"🟢 Zoom Meeting Active • Connected ({self._remote_participant_name})")
+
+    def remove_participant(self, pid: str = ""):
+        """Resets remote participant tile to standby when remote participant leaves."""
+        self._remote_participant_name = ""
+        self._participant_count = 1
+        self.candidate_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: #080c16;
+                border: 1px dashed {Theme.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+        """)
+        self.lbl_cand_name.setText("⚪ Waiting for another participant...")
+        self.lbl_cand_name.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
+        self.lbl_video_quality.setText("Standby")
+        self.lbl_video_quality.setStyleSheet(f"color: {Theme.TEXT_MUTED}; background: transparent; border: none;")
+        self.btn_participants.setText(f"👥 Participants ({self._participant_count})")
+        self.lbl_meeting_status.setText("🟢 Zoom Meeting Active • 1 Participant")
+
     def set_participant_info(self, name: str):
-        self._participant_name = name or "Participant"
-        self.lbl_cand_name.setText(f"🟢 {self._participant_name}")
+        if name and name.strip():
+            self.add_participant("", name.strip())
+        else:
+            self.remove_participant()
 
     def set_candidate_info(self, name: str, role: str = ""):
         self.set_participant_info(name)
@@ -396,7 +439,10 @@ class EmbeddedZoomWorkspace(QWidget):
     def update_connection_state(self, state: str, message: str = ""):
         self._connection_state = state
         if state in ("LIVE", "MEETING_CONNECTED"):
-            self.lbl_meeting_status.setText(f"🟢 Zoom Meeting Active • Connected ({self._participant_name})")
+            if self._remote_participant_name:
+                self.lbl_meeting_status.setText(f"🟢 Zoom Meeting Active • Connected ({self._remote_participant_name})")
+            else:
+                self.lbl_meeting_status.setText("🟢 Zoom Meeting Active • 1 Participant")
             self.lbl_meeting_status.setStyleSheet("color: #10b981; background: transparent; border: none;")
         elif state in ("CONNECTING", "INITIALIZING_MEETING_SDK", "JOINING_EMBEDDED_MEETING"):
             self.lbl_meeting_status.setText("🟡 Connecting to Zoom Meeting...")
@@ -446,7 +492,7 @@ class EmbeddedZoomWorkspace(QWidget):
 
     def set_screen_share_active(self, active: bool, sharer_name: str = ""):
         self._is_screen_shared = active
-        sharer = sharer_name or self._participant_name
+        sharer = sharer_name or self._remote_participant_name or "Participant"
         if active:
             self.lbl_screen_header.setText(f"🖥 Shared Screen ({sharer}'s Workspace):")
             self.lbl_screen_header.setAlignment(Qt.AlignLeft)
@@ -858,9 +904,44 @@ class AICoachTabWidget(QWidget):
         layout.addStretch()
         return widget
 
-    def set_suggestion(self, title: str, text: str):
-        self.lbl_sug_title.setText(title)
-        self.lbl_sug_body.setText(text)
+    def set_coach_state(self, state: str):
+        """Updates AI Coach status banner based on meeting lifecycle and conversation state."""
+        if state == "WAITING_FOR_PARTICIPANT":
+            self.lbl_sug_title.setText("🤖 AI Interviewer Coach (Private)")
+            self.lbl_sug_body.setText("Waiting for candidate activity... Contextual guidance will activate when candidate joins.")
+            self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_MUTED};")
+            self.btn_ask.setVisible(False)
+            self.btn_dismiss.setVisible(False)
+        elif state == "WAITING_FOR_SPEECH":
+            self.lbl_sug_title.setText("💡 Candidate Connected")
+            self.lbl_sug_body.setText("Waiting for speech... Real-time coaching will activate as conversation begins.")
+            self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_MUTED};")
+            self.btn_ask.setVisible(False)
+            self.btn_dismiss.setVisible(False)
+        elif state == "ANALYZING":
+            self.lbl_sug_title.setText("🧠 Analyzing Response...")
+            self.lbl_sug_body.setText("Evaluating response depth against technical rubric and claims...")
+            self.lbl_sug_body.setStyleSheet(f"color: {Theme.ACCENT_CYAN};")
+
+    def set_suggestion(self, title_or_sug: Any, text: str = ""):
+        """Sets evidence-based AI suggestion in Coach panel."""
+        if hasattr(title_or_sug, "suggestion_type"):
+            sug = title_or_sug
+            type_str = sug.suggestion_type.replace("_", " ")
+            self.lbl_sug_title.setText(f"💡 [{type_str}] {sug.title}")
+            
+            ts_str = time.strftime("%H:%M:%S", time.localtime(sug.evidence_timestamp))
+            evidence_html = f"<b>Evidence ({ts_str}):</b><br><font color='#e2e8f0'><i>\"{sug.evidence_text}\"</i></font><br><br>" if sug.evidence_text else ""
+            obs_html = f"<b>Observation:</b> {sug.reason}<br><br>" if sug.reason else ""
+            q_html = f"<b>Suggested Follow-up:</b><br><font color='{Theme.ACCENT_CYAN}'><b>\"{sug.content}\"</b></font>"
+            
+            self.lbl_sug_body.setText(f"{obs_html}{evidence_html}{q_html}")
+            self._current_suggested_question = sug.content
+        else:
+            self.lbl_sug_title.setText(str(title_or_sug))
+            self.lbl_sug_body.setText(str(text))
+            self._current_suggested_question = str(text)
+
         self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_PRIMARY};")
         self.btn_ask.setVisible(True)
         self.btn_dismiss.setVisible(True)
@@ -915,13 +996,20 @@ class AICoachTabWidget(QWidget):
             lbl.setFont(QFont("Segoe UI", 9))
             self.rubric_layout.insertWidget(self.rubric_layout.count() - 1, lbl)
 
+    def update_analysis_summary(self, interruptions_count: int, baseline_status: str):
+        self.lbl_analysis_details.setText(
+            f"• Interruptions: {interruptions_count} detected\n"
+            f"• Candidate Baseline: {baseline_status.capitalize()}\n"
+            "• Question Quality: Normal"
+        )
+
     def _on_ask_suggestion(self):
-        text = self.lbl_sug_body.text()
-        self.ask_suggestion_clicked.emit(text)
+        question = getattr(self, "_current_suggested_question", "") or self.lbl_sug_body.text()
+        self.ask_suggestion_clicked.emit(question)
 
     def _on_dismiss_suggestion(self):
-        self.lbl_sug_title.setText("💡 AI Follow-Up Guidance")
-        self.lbl_sug_body.setText("Waiting for live interview data... Next observation will appear dynamically.")
-        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_SECONDARY};")
+        self.lbl_sug_title.setText("💡 AI Interviewer Coach")
+        self.lbl_sug_body.setText("Waiting for next candidate response... Observations will appear dynamically.")
+        self.lbl_sug_body.setStyleSheet(f"color: {Theme.TEXT_MUTED};")
         self.btn_ask.setVisible(False)
         self.btn_dismiss.setVisible(False)

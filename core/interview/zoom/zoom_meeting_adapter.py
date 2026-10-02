@@ -60,6 +60,7 @@ class ZoomMeetingAdapter(QObject):
         self._sharer_name: str = ""
         self._is_screen_shared = False
         self._active_sdk_signature: Optional[str] = None
+        self._remote_participants: Dict[str, str] = {}  # {participant_id: display_name}
 
     @property
     def state(self) -> ZoomConnectionState:
@@ -219,6 +220,25 @@ class ZoomMeetingAdapter(QObject):
         self._sharer_name = sharer if active else ""
         self.screen_share_status.emit(active, self._sharer_name)
 
+    def add_remote_participant(self, participant_id: str, name: str):
+        """Called when a remote participant actually joins via Zoom SDK."""
+        self._remote_participants[participant_id] = name
+        logger.info(f"[ZoomMeetingAdapter] Remote participant joined: {name} (ID: {participant_id}). Total: {self.get_participant_count()}")
+        self.participant_joined.emit(participant_id, name)
+
+    def remove_remote_participant(self, participant_id: str):
+        """Called when a remote participant leaves via Zoom SDK."""
+        name = self._remote_participants.pop(participant_id, None)
+        logger.info(f"[ZoomMeetingAdapter] Remote participant left: {name} (ID: {participant_id}). Total: {self.get_participant_count()}")
+        self.participant_left.emit(participant_id)
+
+    def get_participant_count(self) -> int:
+        """Returns total participants (1 for interviewer + remote count). Never 0 when connected."""
+        return 1 + len(self._remote_participants)
+
+    def get_remote_participants(self) -> Dict[str, str]:
+        return dict(self._remote_participants)
+
     def disconnect_meeting(self):
         """Disconnects meeting session cleanly."""
         if self._state in (ZoomConnectionState.IDLE, ZoomConnectionState.ENDED):
@@ -227,4 +247,5 @@ class ZoomMeetingAdapter(QObject):
         self._is_screen_shared = False
         self._sharer_name = ""
         self._active_sdk_signature = None
+        self._remote_participants.clear()
         self._set_state(ZoomConnectionState.ENDED, "Meeting disconnected cleanly.")

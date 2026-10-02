@@ -62,6 +62,8 @@ class InterviewDashboard(QWidget):
         self.controller.interview_ended.connect(self._on_interview_ended)
         self.controller.report_ready.connect(self._on_report_ready)
         self.controller.error_occurred.connect(self._on_error)
+        self.controller.participant_joined.connect(self._on_remote_participant_joined)
+        self.controller.participant_left.connect(self._on_remote_participant_left)
 
         # Zoom meeting adapter signals
         self.controller.zoom_adapter.state_changed.connect(self._on_zoom_state_changed)
@@ -77,6 +79,22 @@ class InterviewDashboard(QWidget):
         m.visual_explain_ready.connect(self._on_visual_explain_result)
         m.rubric_updated.connect(self._on_rubric_updated)
         m.resume_claims_updated.connect(self._on_resume_claims_updated)
+
+    def _on_remote_participant_joined(self, pid: str, name: str):
+        if hasattr(self, 'zoom_workspace'):
+            self.zoom_workspace.add_participant(pid, name)
+        if hasattr(self, 'coach_tabs'):
+            self.coach_tabs.set_coach_state("WAITING_FOR_SPEECH")
+        if hasattr(self, '_live_title_lbl'):
+            self._live_title_lbl.setText(f"🔴 LIVE • Zoom Meeting • Connected ({name})")
+
+    def _on_remote_participant_left(self, pid: str):
+        if hasattr(self, 'zoom_workspace'):
+            self.zoom_workspace.remove_participant(pid)
+        if hasattr(self, 'coach_tabs'):
+            self.coach_tabs.set_coach_state("WAITING_FOR_PARTICIPANT")
+        if hasattr(self, '_live_title_lbl'):
+            self._live_title_lbl.setText("🔴 LIVE • Zoom Meeting • 1 Participant")
 
     def _on_zoom_state_changed(self, state: str, msg: str):
         if hasattr(self, 'zoom_workspace'):
@@ -761,7 +779,7 @@ class InterviewDashboard(QWidget):
     def _on_preflight_start(self):
         if self._pending_setup:
             if hasattr(self, 'zoom_workspace'):
-                self.zoom_workspace.set_candidate_info(self._pending_setup.candidate_name)
+                self.zoom_workspace.remove_participant()  # Interviewer is Participant #1, candidate tile in standby
                 if self._pending_setup.meeting_link:
                     valid, _, info = self.controller.parse_meeting_url(self._pending_setup.meeting_link)
                     if valid:
@@ -776,7 +794,7 @@ class InterviewDashboard(QWidget):
         """Explicit secondary fallback: launches meeting in external browser/client upon user request."""
         if self._pending_setup:
             if hasattr(self, 'zoom_workspace'):
-                self.zoom_workspace.set_candidate_info(self._pending_setup.candidate_name)
+                self.zoom_workspace.remove_participant()
             iid = self.controller.start_interview(self._pending_setup, self.engine)
             if iid:
                 self.controller.zoom_adapter.launch_companion_mode()
@@ -874,9 +892,9 @@ class InterviewDashboard(QWidget):
     def _on_interview_started(self, interview_id):
         setup = self.controller.session.setup if self.controller.session else None
         if setup:
-            self._live_title_lbl.setText(
-                f"🔴 LIVE • Zoom Meeting • {setup.candidate_name} ({setup.job_role})"
-            )
+            self._live_title_lbl.setText("🔴 LIVE • Zoom Meeting • 1 Participant")
+            if hasattr(self, 'coach_tabs'):
+                self.coach_tabs.set_coach_state("WAITING_FOR_PARTICIPANT")
             if self.controller.session:
                 self.controller.session.timer_tick.connect(self._on_timer_tick)
 
@@ -900,6 +918,7 @@ class InterviewDashboard(QWidget):
         self.coach_tabs.tab_analysis.findChild(TalkTimeWidget).set_talk_time(
             m.interviewer_talk_pct, m.candidate_talk_pct
         )
+        self.coach_tabs.update_analysis_summary(len(m.interruptions), m.baseline_status)
         if m.current_wpm:
             self.waveform_widget.set_voice_activity(True, m._last_speaker or "Speaker", m.current_wpm)
 
@@ -916,7 +935,7 @@ class InterviewDashboard(QWidget):
         self.transcript_widget.add_transcript("Fairness Alert", explanation, time.strftime("%H:%M:%S", time.localtime(ts)))
 
     def _on_copilot_suggestion(self, sug):
-        self.coach_tabs.set_suggestion(sug.title, sug.content)
+        self.coach_tabs.set_suggestion(sug)
 
     def _on_visual_explain_result(self, res):
         self.coach_tabs.set_visual_explanation(res)

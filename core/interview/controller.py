@@ -188,6 +188,8 @@ class InterviewController(QObject):
     interview_ended = Signal()
     report_ready = Signal(dict)
     error_occurred = Signal(str, str)
+    participant_joined = Signal(str, str)  # (participant_id, name)
+    participant_left = Signal(str)         # (participant_id)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -223,7 +225,7 @@ class InterviewController(QObject):
         self._timer: Optional[QTimer] = None
         self._visual_selections: List[Dict[str, Any]] = []
 
-        # Wire Copilot and RTMS signals
+        # Wire Copilot, RTMS, and Zoom Adapter signals
         self._wire_copilot_signals()
 
     def _wire_copilot_signals(self):
@@ -231,6 +233,20 @@ class InterviewController(QObject):
         self.copilot_engine.risk_alert_ready.connect(self._on_risk_alert)
         self.copilot_engine.visual_explain_ready.connect(self._on_visual_explain_result)
         self.zoom_rtms.transcript_segment.connect(self._on_rtms_transcript_segment)
+        self.zoom_adapter.participant_joined.connect(self._on_participant_joined)
+        self.zoom_adapter.participant_left.connect(self._on_participant_left)
+
+    def _on_participant_joined(self, pid: str, name: str):
+        logger.info(f"[InterviewController] Participant joined: {name} ({pid})")
+        if self.session:
+            self.session.emit_event("participant", f"Participant joined: {name}", f'{{"participant_id": "{pid}", "name": "{name}"}}')
+        self.participant_joined.emit(pid, name)
+
+    def _on_participant_left(self, pid: str):
+        logger.info(f"[InterviewController] Participant left: {pid}")
+        if self.session:
+            self.session.emit_event("participant", f"Participant left: {pid}", f'{{"participant_id": "{pid}"}}')
+        self.participant_left.emit(pid)
 
     @property
     def interview_id(self) -> Optional[str]:
@@ -473,9 +489,8 @@ class InterviewController(QObject):
     # ── 4. Zoom Meeting Launching ──
 
     def launch_zoom_meeting(self) -> bool:
-        """Launches Zoom meeting either embedded or via companion browser."""
-        candidate_name = self.session.setup.candidate_name if self.session and self.session.setup else "Candidate"
-        return self.zoom_adapter.launch_or_embed_meeting(display_name=f"Interviewer (with {candidate_name})")
+        """Launches Zoom meeting embedded inside Intent AI workspace."""
+        return self.zoom_adapter.launch_or_embed_meeting(display_name="Interviewer")
 
     # ── 5. Engine Hooks & Concurrency ──
 
