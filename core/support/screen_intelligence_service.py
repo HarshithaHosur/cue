@@ -11,6 +11,7 @@
 
 import time
 import hashlib
+import json
 import threading
 import re
 import math
@@ -164,8 +165,8 @@ class ScreenIntelligenceService(QObject):
         """
         Primary entry point for the assistant.
         Returns a high-precision structured understanding of the current screen.
-        Utilizes caching to return instant sub-50ms responses for follow-up questions
-        without calling Gemini Vision unnecessarily.
+        Reuses a previous analysis only when the request, conversation, runtime
+        context, active window, and complete screenshot fingerprint all match.
         """
         with self._lock:
             # 1. Update Context
@@ -191,7 +192,7 @@ class ScreenIntelligenceService(QObject):
             context = SupportContextDetector.detect_context(captured_info)
             self.current_context = context
             self.last_img_bytes = img_bytes
-            img_hash = hashlib.md5(img_bytes[:4096] + str(len(img_bytes)).encode()).hexdigest()
+            img_hash = hashlib.sha256(img_bytes).hexdigest()
 
             # 4. OCR Extraction (EasyOCR preferred, Tesseract fallback)
             ocr_res = self.ocr_engine.extract_text(img_bytes)
@@ -240,6 +241,36 @@ class ScreenIntelligenceService(QObject):
                 enriched_context["detected_error_tokens"] = ocr_res["detected_errors"]
             if additional_context:
                 enriched_context["additional_runtime_context"] = additional_context
+
+            history_fingerprint = json.dumps(
+                conversation_history or [], sort_keys=True, default=str, separators=(",", ":")
+            )
+            runtime_fingerprint = json.dumps(
+                additional_context or {}, sort_keys=True, default=str, separators=(",", ":")
+            )
+            request_key = hashlib.sha256(
+                json.dumps(
+                    {
+                        "command": " ".join(command.casefold().split()),
+                        "history": history_fingerprint,
+                        "runtime": runtime_fingerprint,
+                        "window": win_info.get("title", ""),
+                        "bounds": win_info.get("capture_origin", win_info.get("bounds", {})),
+                        "cursor": screen_ctx.current_cursor_position,
+                        "image": img_hash,
+                    },
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+
+            if not force_refresh and self.cached_analysis is not None and request_key == self.cache_key:
+                self.cache_hits += 1
+                self.api_calls_avoided += 1
+                cached_analysis = dict(self.cached_analysis)
+                cached_analysis["cache_hit"] = True
+                self.signals.analysis_ready.emit(cached_analysis)
+                return cached_analysis
 
             # 7. Analyze with Gemini Vision + ScreenContext
             analysis = self.page_analyzer.analyze(
@@ -295,7 +326,7 @@ class ScreenIntelligenceService(QObject):
 
             # 10. Update Cache
             self.cached_analysis = analysis
-            self.cache_key = f"{win_info.get('title', '')}_{img_hash}"
+            self.cache_key = request_key
             self.cache_timestamp = time.time()
             self.total_analyses += 1
 

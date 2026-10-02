@@ -65,6 +65,13 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         with self.processing_lock:
             cmd_lower = command.lower().strip()
             self.conversation_history.append({"role": "user", "content": command, "timestamp": time.time()})
+            self.active_workflow = command
+            self.task_state.update({
+                "previous_goal": self.task_state.get("goal", ""),
+                "goal": command,
+                "current_request": command,
+                "status": "observing",
+            })
 
             # Check if user is confirming or cancelling an existing pending action
             if self.safety_manager.has_pending_action() or self.active_tech_action:
@@ -74,6 +81,14 @@ class TechnicalSupportAgent(CustomerSupportAgent):
                 elif any(w in cmd_lower for w in ["stop", "no", "cancel", "abort", "don't", "wait"]):
                     self.cancel_pending_action()
                     return
+                else:
+                    if self.safety_manager.has_pending_action():
+                        superseded = self.safety_manager.cancel_pending_action()
+                        self._update_latest_action_status(
+                            superseded.get("target_label", "action"), "superseded_by_new_request"
+                        )
+                    if self.active_tech_action:
+                        self.active_tech_action = None
 
             # ── DOMAIN 1: Software Installation Assistant ──
             if self._is_software_install_request(cmd_lower):
@@ -302,7 +317,11 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             )
         except Exception as error:
             message = "I couldn't complete screen-grounded reasoning, so I did not recommend or execute a change."
-            self.audit_logger.log(str(error), category="ANALYSIS_ERROR", risk_level="HIGH_RISK")
+            self.audit_logger.log(
+                f"Screen analysis failed ({type(error).__name__})",
+                category="ANALYSIS_ERROR",
+                risk_level="HIGH_RISK",
+            )
             self.update_companion("error", message)
             self.signals.reasoning_step.emit(message)
             self.signals.response_ready.emit(message, message)
@@ -502,14 +521,19 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         try:
             analysis = self.screen_intelligence.get_screen_understanding(
                 command=command,
-                conversation_history=self.conversation_history
+                conversation_history=self.conversation_history,
+                additional_context={"task_state": dict(self.task_state)},
             )
         except Exception as error:
-            print(f"[TechnicalSupportAgent] Screen analysis failed: {error}")
-            message = "Screen analysis is unavailable. Check Gemini configuration and network access; no action was taken."
+            print(f"[TechnicalSupportAgent] Screen analysis failed ({type(error).__name__}).")
+            message = "I couldn't analyze the current screen, so I took no action. Check the AI connection or try again."
             self.update_companion("error", message)
             self.signals.reasoning_step.emit(message)
-            self.audit_logger.log(str(error), category="ANALYSIS_ERROR", risk_level="HIGH_RISK")
+            self.audit_logger.log(
+                f"Screen analysis failed ({type(error).__name__})",
+                category="ANALYSIS_ERROR",
+                risk_level="HIGH_RISK",
+            )
             return
 
         context = self.screen_intelligence.current_context
@@ -569,6 +593,14 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             target_label=target_label,
             details=analysis
         )
+        self.task_state["screen"] = analysis.get("screen_context", {})
+        self.task_state["last_action"] = {
+            "action": suggested_action,
+            "target": target_label if target_found else "",
+            "status": "awaiting_confirmation" if action_payload["requires_confirmation"] else "planned",
+        }
+        self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
+        self.task_state["status"] = self.task_state["last_action"]["status"]
         self._record_assistant_response(
             explanation_text,
             suggested_action,

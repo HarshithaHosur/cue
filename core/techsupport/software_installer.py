@@ -292,13 +292,14 @@ class SoftwareInstallationAssistant:
         except Exception as e:
             # If direct download is restricted or blocked, fallback to winget or opening browser
             self.audit_logger.log(
-                f"Direct download error for {info['name']}: {e}. Falling back to browser source.",
+                f"Direct download failed for {info['name']} ({type(e).__name__}); falling back to official browser source.",
                 category="SOFTWARE_INSTALL",
                 risk_level="WARNING"
             )
+            self.active_install["step"] = "DOWNLOAD_FAILED"
             return {
                 "success": False,
-                "error": str(e),
+                "error": "The download failed because of a network or permission issue.",
                 "fallback_url": info["official_url"]
             }
 
@@ -354,7 +355,11 @@ class SoftwareInstallationAssistant:
             return {"success": False, "error": "Installer file not found on disk."}
 
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            self.active_install["step"] = "LAUNCH_FAILED"
+            return {
+                "success": False,
+                "error": f"The installer could not be launched ({type(e).__name__}).",
+            }
 
     def verify_installation(self, software_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -400,6 +405,6 @@ class SoftwareInstallationAssistant:
         except Exception as e:
             return {
                 "installed": False,
-                "error": str(e),
-                "details": f"Verification error: {e}"
+                "error": f"Installation verification failed ({type(e).__name__}).",
+                "details": "The verification command could not be completed. Check the installation and environment PATH.",
             }

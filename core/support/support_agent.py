@@ -73,6 +73,15 @@ class CustomerSupportAgent(QObject):
         self.last_proactive_notice_time = 0.0
         self.active_workflow: Optional[str] = None
         self.workflow_step: int = 0
+        self.task_state: Dict[str, Any] = {
+            "goal": "",
+            "current_request": "",
+            "status": "idle",
+            "last_action": None,
+            "selected_item": "",
+            "screen": {},
+            "workflow_steps": [],
+        }
         self.processing_lock = threading.Lock()
 
     def set_voice_engine(self, voice_engine):
@@ -121,8 +130,21 @@ class CustomerSupportAgent(QObject):
                 elif any(w in cmd_lower for w in ["stop", "no", "cancel", "abort", "don't", "wait"]):
                     self.cancel_pending_action()
                     return
+                else:
+                    superseded = self.safety_manager.cancel_pending_action()
+                    if superseded:
+                        self._update_latest_action_status(
+                            superseded.get("target_label", "action"), "superseded_by_new_request"
+                        )
+                        clear_highlight()
 
-                    self.active_workflow = command
+            self.active_workflow = command
+            self.task_state.update({
+                "previous_goal": self.task_state.get("goal", ""),
+                "goal": command,
+                "current_request": command,
+                "status": "observing",
+            })
 
             # ── 1. Listen & Acknowledge ──
             self.update_companion("listening", "Listening to your request...")
@@ -135,22 +157,30 @@ class CustomerSupportAgent(QObject):
             try:
                 analysis = self.screen_intelligence.get_screen_understanding(
                     command=command,
-                    conversation_history=self.conversation_history
+                    conversation_history=self.conversation_history,
+                    additional_context={"task_state": dict(self.task_state)},
                 )
             except Exception as error:
-                print(f"[CustomerSupportAgent] Screen analysis failed: {error}")
-                message = "Screen analysis is unavailable. Check Gemini configuration and network access; no action was taken."
+                print(f"[CustomerSupportAgent] Screen analysis failed ({type(error).__name__}).")
+                message = "I couldn't analyze the current screen, so I took no action. Check the AI connection or try again."
+                self.task_state["status"] = "blocked"
                 self.update_companion("error", message)
                 self.signals.reasoning_step.emit(message)
                 self.signals.response_ready.emit(message, message)
                 self._record_assistant_response(message, status="failed")
                 self.speak(message)
-                self.audit_logger.log(str(error), category="ANALYSIS_ERROR", risk_level="HIGH_RISK")
+                self.audit_logger.log(
+                    f"Screen analysis failed ({type(error).__name__})",
+                    category="ANALYSIS_ERROR",
+                    risk_level="HIGH_RISK",
+                )
                 return
 
             context = self.screen_intelligence.current_context
             self.last_detected_website = context.get("website", "General Website")
             self.last_detected_page_type = context.get("page_type", "Standard Webpage")
+            self.task_state["screen"] = analysis.get("screen_context", {})
+            self.task_state["selected_item"] = analysis.get("selected_item", self.task_state.get("selected_item", ""))
             self.signals.context_updated.emit(context)
 
             if analysis.get("cache_hit"):
@@ -169,6 +199,7 @@ class CustomerSupportAgent(QObject):
                 self.update_companion("speaking", warning_msg)
                 self.signals.reasoning_step.emit("⚠️ Visual confidence check failed: Safely pausing automation")
                 self.signals.response_ready.emit(warning_msg, warning_msg)
+                self.task_state["status"] = "needs_clearer_screen"
                 self.speak(warning_msg)
                 self.audit_logger.log(
                     f"Visual Confidence Check Failed: {warning_msg}",
@@ -215,6 +246,13 @@ class CustomerSupportAgent(QObject):
                 target_label=target_label,
                 details=analysis
             )
+            self.task_state["last_action"] = {
+                "action": suggested_action,
+                "target": target_label if target_found else "",
+                "status": "awaiting_confirmation" if action_payload["requires_confirmation"] else "planned",
+            }
+            self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
+            self.task_state["status"] = self.task_state["last_action"]["status"]
             self._record_assistant_response(
                 explanation_text,
                 suggested_action,
@@ -242,7 +280,16 @@ class CustomerSupportAgent(QObject):
                 # Safe action: execute immediately
                 self.update_companion("speaking", explanation_voice)
                 self.speak(explanation_voice)
-                self._execute_action_direct(action_payload)
+                self.task_state["status"] = (
+                    "completed" if analysis.get("workflow_completed") else "awaiting_user"
+                )
+                if analysis.get("workflow_completed"):
+                    self.active_workflow = None
+                self._execute_action_direct(
+                    action_payload,
+                    observe_after=suggested_action in {"scroll", "click"},
+                    automatic_steps=1 if suggested_action == "scroll" else 0,
+                )
 
     def confirm_pending_action(self):
         """User confirmed pending action via voice 'System continue' or UI click."""
@@ -251,7 +298,6 @@ class CustomerSupportAgent(QObject):
             self.update_companion("idle", "No action pending.")
             return
 
-        target_coords = action.get("target_coords")
         target_label = action.get("target_label", "element")
         action_name = action.get("action_name", "click")
 
@@ -260,8 +306,13 @@ class CustomerSupportAgent(QObject):
             clear_highlight()
             self.update_companion("thinking", message)
             self._update_latest_action_status(target_label, "cancelled_screen_changed")
+            self.task_state["last_action"] = {"action": action_name, "target": target_label, "status": "stale_target"}
+            self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
+            self.task_state["status"] = "observing"
             self._observe_after_action()
             return
+
+        target_coords = action.get("target_coords")
 
         self.update_companion("executing", f"Executing: {target_label}...")
         self.signals.reasoning_step.emit(f"⚡ User Confirmed: Executing {action_name} on '{target_label}'")
@@ -273,9 +324,13 @@ class CustomerSupportAgent(QObject):
                 pyautogui.click(x, y)
                 clear_highlight()
             except Exception as e:
-                message = f"I couldn't click '{target_label}': {e}. No completion was recorded."
+                message = f"I couldn't click '{target_label}' because the desktop action failed. No completion was recorded."
                 self._update_latest_action_status(target_label, "failed")
-                self.audit_logger.log(str(e), category="ACTION_ERROR", risk_level="HIGH_RISK")
+                self.audit_logger.log(
+                    f"Click failed ({type(e).__name__})",
+                    category="ACTION_ERROR",
+                    risk_level="HIGH_RISK",
+                )
                 self.signals.response_ready.emit(message, message)
                 self.speak(message)
                 self.update_companion("error", message)
@@ -290,6 +345,9 @@ class CustomerSupportAgent(QObject):
         # Explain what happened
         self.update_companion("thinking", "Checking the updated screen...")
         self._update_latest_action_status(target_label, "executed")
+        self.task_state["last_action"] = {"action": action_name, "target": target_label, "status": "executed"}
+        self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
+        self.task_state["status"] = "observing"
         self._observe_after_action()
 
     def cancel_pending_action(self):
@@ -304,7 +362,12 @@ class CustomerSupportAgent(QObject):
         self._update_latest_action_status(target_label, "cancelled")
         self.speak("Action cancelled. Let me know how else I can help.")
 
-    def _execute_action_direct(self, action: Dict[str, Any]):
+    def _execute_action_direct(
+        self,
+        action: Dict[str, Any],
+        observe_after: bool = True,
+        automatic_steps: int = 0,
+    ):
         """Executes safe actions (highlight, explain, scroll)."""
         action_name = action.get("action_name")
         target_label = action.get("target_label", "")
@@ -314,11 +377,22 @@ class CustomerSupportAgent(QObject):
             amount = 600 if direction == "up" else -600
             pyautogui.scroll(amount)
             self.audit_logger.log(f"Scrolled page {direction}", category="ACTION", risk_level="SAFE")
+            self.task_state["last_action"] = {"action": "scroll", "target": direction, "status": "executed"}
+            self.task_state["status"] = "observing"
+            if observe_after:
+                time.sleep(0.35)
+                self._observe_after_action(automatic_steps)
+                return
         elif action_name == "highlight":
             self.audit_logger.log(f"Highlighted {target_label}", category="ACTION", risk_level="SAFE")
 
-        time.sleep(1.0)
-        self.update_companion("completed", "Task completed.")
+        if observe_after:
+            time.sleep(0.35)
+            self._observe_after_action()
+            return
+
+        if self.task_state.get("status") == "completed":
+            self.update_companion("completed", "Task completed.")
 
     def _execute_scroll(self, direction: str = "down"):
         clicks = -650 if direction == "down" else 650
@@ -354,24 +428,37 @@ class CustomerSupportAgent(QObject):
             )
             return bool(label)
         except Exception as error:
-            print(f"[CustomerSupportAgent] Target revalidation failed: {error}")
+            print(f"[CustomerSupportAgent] Target revalidation failed ({type(error).__name__}).")
             return False
 
-    def _observe_after_action(self):
-        command = self.active_workflow or "Continue helping with the current task"
+    def _observe_after_action(self, automatic_steps: int = 0):
+        command = self.active_workflow or self.task_state.get("goal") or "Help with the current task"
+        if automatic_steps > 3:
+            message = "I paused after several automatic navigation steps. Please tell me what you see or which option you want next."
+            self.task_state["status"] = "awaiting_user"
+            self.signals.response_ready.emit(message, message)
+            self.speak(message)
+            self.update_companion("waiting", message)
+            return
         try:
             analysis = self.screen_intelligence.get_screen_understanding(
-                command=f"The user approved the previous step for: {command}. Analyze the updated screen and explain the next safe step.",
+                command=command,
                 conversation_history=self.conversation_history,
                 force_refresh=True,
+                additional_context={"task_state": dict(self.task_state)},
             )
             context = self.screen_intelligence.current_context
+            self.task_state["screen"] = analysis.get("screen_context", {})
+            self.task_state["selected_item"] = analysis.get(
+                "selected_item", self.task_state.get("selected_item", "")
+            )
             self.signals.context_updated.emit(context)
             if not analysis.get("confidence_verified", True):
                 warning = analysis.get(
                     "confidence_warning", self.screen_intelligence.LOW_CONFIDENCE_MESSAGE
                 )
                 self.signals.response_ready.emit(warning, warning)
+                self.task_state["status"] = "needs_clearer_screen"
                 self.speak(warning)
                 self.update_companion("waiting", warning)
                 return
@@ -394,6 +481,13 @@ class CustomerSupportAgent(QObject):
                 text = f"{text}\n\n{next_action['confirmation_prompt']}"
                 voice = f"{voice} {next_action['confirmation_prompt']}".strip()
                 self.signals.confirmation_required.emit(next_action)
+                self.task_state["last_action"] = {
+                    "action": next_action["action_name"],
+                    "target": next_action["target_label"],
+                    "status": "awaiting_confirmation",
+                }
+                self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
+                self.task_state["status"] = "awaiting_confirmation"
                 self.update_companion("waiting", next_action["confirmation_prompt"])
             self.signals.response_ready.emit(text, voice)
             self._record_assistant_response(
@@ -403,11 +497,25 @@ class CustomerSupportAgent(QObject):
             )
             self.speak(voice)
             if not next_action["requires_confirmation"]:
-                self.update_companion("speaking", voice)
-                self._execute_action_direct(next_action)
+                action_name = next_action["action_name"]
+                if action_name == "scroll":
+                    self._execute_action_direct(next_action, observe_after=False)
+                    self._observe_after_action(automatic_steps + 1)
+                else:
+                    self.task_state["status"] = (
+                        "completed" if analysis.get("workflow_completed") else "awaiting_user"
+                    )
+                    if analysis.get("workflow_completed"):
+                        self.active_workflow = None
+                    self.update_companion("speaking", voice)
         except Exception as error:
-            message = "The action was attempted, but I could not analyze the updated screen. Please check the active window."
-            self.audit_logger.log(str(error), category="POST_ACTION_ANALYSIS_ERROR", risk_level="HIGH_RISK")
+            message = "The action was attempted, but I couldn't analyze the updated screen. Please check the active window and try again."
+            self.task_state["status"] = "post_action_analysis_failed"
+            self.audit_logger.log(
+                f"Post-action analysis failed ({type(error).__name__})",
+                category="POST_ACTION_ANALYSIS_ERROR",
+                risk_level="HIGH_RISK",
+            )
             self.signals.response_ready.emit(message, message)
             self.speak(message)
             self.update_companion("error", message)

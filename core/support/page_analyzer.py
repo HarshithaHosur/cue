@@ -49,7 +49,7 @@ class SupportPageAnalyzer:
                 genai.configure(api_key=self.api_key)
                 self.client_ready = True
             except Exception as e:
-                print(f"[PageAnalyzer] genai configure note: {e}")
+                print(f"[PageAnalyzer] Gemini client configuration failed ({type(e).__name__}).")
                 self.client_ready = False
 
     def analyze(
@@ -72,12 +72,13 @@ class SupportPageAnalyzer:
         """
         self._init_gemini()
 
-        # Format conversation history
+        # Keep recent utterances, action outcomes, and task state available for references.
         history_summary = ""
         if conversation_history:
             history_summary = "Recent Conversation History:\n" + "\n".join(
                 f"- {item.get('role', 'user')}: {item.get('content', '')}"
-                for item in conversation_history[-4:]
+                f" [action={item.get('action_taken', '')}; status={item.get('status', '')}]"
+                for item in conversation_history[-12:]
             )
 
         # ── 1. Gemini Vision Multimodal Reasoning ──
@@ -94,6 +95,8 @@ ROLE & PERSONA:
 You are an empathetic, highly skilled human support executive who can SEE the user's active screen, LISTEN to their voice, and help guide or automate tasks.
 You assist across ANY website (Amazon, Meesho, Flipkart, Zomato, GitHub) and application (Terminal, VS Code, Browser).
 NEVER use placeholder text or canned responses. Reason genuinely over what is ACTUALLY VISIBLE on the user's screen right now.
+The current request is a new reasoning turn. Treat conversation history as context, never as a substitute for observing the supplied current screenshot. Resolve phrases such as "this product", "that order", "the one I just opened", "return it", "track this", and "cancel it" from prior dialogue, recorded action outcomes, and the current visible selection. If the referent is not supported by the current screen or history, ask a clarifying question and do not act.
+When an approved action has just completed, use the current screenshot and task state to decide the next step. Do not declare completion unless the visible workflow supports it.
 
 GUIDELINES:
 1. Speak warmly and conversationally for earbud TTS audio. Avoid curt, robotic statements.
@@ -110,6 +113,10 @@ Analyze the visible screen, the user's spoken request: "{command}", and return v
   "page_type": "string (e.g. Home, Orders, Cart, Returns, Customer Support, Product Page, Checkout, Terminal)",
   "is_support_page": true|false,
   "user_intent": "string (e.g. Open Cart, Replace Product, Diagnose Git Error)",
+    "current_user_goal": "string",
+    "selected_item": "string or empty when no item is selected",
+    "dialogs": [],
+    "warnings": [],
   "reasoning_steps": [
     "👀 Detected <Website> <Page Type>",
     "🔍 Locating <Target Button/Element>",
@@ -126,9 +133,9 @@ Analyze the visible screen, the user's spoken request: "{command}", and return v
     "h": integer (height in pixels),
     "confidence": float (0.0 to 1.0)
   }},
-  "explanation_text": "string (professional chat response)",
-  "explanation_voice": "string (natural spoken response)",
-    "suggested_action": "click|highlight|scroll|explain|fill|select",
+    "explanation_text": "string (professional chat response)",
+    "explanation_voice": "string (natural spoken response)",
+    "suggested_action": "click|highlight|scroll|explain",
     "scroll_direction": "up|down|none",
   "risk_level": "SAFE|MEDIUM_RISK|HIGH_RISK",
   "requires_confirmation": true|false,
