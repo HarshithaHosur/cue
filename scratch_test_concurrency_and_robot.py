@@ -383,6 +383,25 @@ class TestConcurrencyAndRobotSystem(unittest.TestCase):
         self.assertEqual(mouse_up.call_args_list[-1].kwargs, {"button": "left"})
         self.assertFalse(cursor.is_pinching)
 
+    def test_index_thumb_pinch_uses_left_click_not_overlapping_right_pinch(self):
+        cursor = CursorController()
+        pinched_hand = make_gesture_landmarks([False, True, False, False, False])
+        pinched_hand[4] = DummyLandmark(pinched_hand[8].x, pinched_hand[8].y)
+        released_hand = make_gesture_landmarks([False, True, False, False, False])
+        with (
+            patch.object(cursor_controller_module.sys, "platform", "linux"),
+            patch.object(cursor_controller_module.pyautogui, "moveTo"),
+            patch.object(cursor_controller_module.pyautogui, "mouseDown") as mouse_down,
+            patch.object(cursor_controller_module.pyautogui, "mouseUp") as mouse_up,
+            patch.object(cursor_controller_module.pyautogui, "rightClick") as right_click,
+        ):
+            cursor.update(pinched_hand)
+            cursor.update(released_hand)
+
+        self.assertEqual(mouse_down.call_count, 1)
+        self.assertEqual(mouse_up.call_count, 1)
+        right_click.assert_not_called()
+
 
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(TestConcurrencyAndRobotSystem)

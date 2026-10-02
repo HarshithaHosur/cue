@@ -143,8 +143,14 @@ class CursorController:
         left_pinch_dist = math.hypot(thumb.x - index.x, thumb.y - index.y)
         right_pinch_dist = math.hypot(thumb.x - middle.x, thumb.y - middle.y)
 
+        # If both distances overlap, the requested thumb-index pinch is a left-click.
+        left_is_pinched = (left_pinch_dist < PINCH_THRESHOLD_ENTER) if not self.is_pinching else (left_pinch_dist < PINCH_THRESHOLD_EXIT)
+
         # ── 3. Right Click Pinch Evaluation (Thumb + Middle) ──
-        right_is_pinched = (right_pinch_dist < PINCH_THRESHOLD_ENTER) if not self.is_right_pinching else (right_pinch_dist < PINCH_THRESHOLD_EXIT)
+        right_is_pinched = (
+            not left_is_pinched
+            and ((right_pinch_dist < PINCH_THRESHOLD_ENTER) if not self.is_right_pinching else (right_pinch_dist < PINCH_THRESHOLD_EXIT))
+        )
         if right_is_pinched:
             if not self.is_right_pinching:
                 self.is_right_pinching = True
@@ -160,8 +166,6 @@ class CursorController:
             self.is_right_pinching = False
 
         # ── 4. Left Click & Drag State Machine (Thumb + Index) ──
-        left_is_pinched = (left_pinch_dist < PINCH_THRESHOLD_ENTER) if not self.is_pinching else (left_pinch_dist < PINCH_THRESHOLD_EXIT)
-
         if left_is_pinched:
             if not self.is_pinching:
                 # Pinch initiated: send LEFTDOWN immediately so drag & click start at exact position

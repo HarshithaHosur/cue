@@ -83,6 +83,12 @@ class CustomerSupportRoutingTests(unittest.TestCase):
         self.assertEqual(result, "Opened Amazon Customer Care help page.")
         open_default.assert_called_once_with("https://www.amazon.in/gp/help/customer/display.html", new=2)
 
+    def test_generic_customer_support_opens_amazon_help_page(self):
+        with patch("intent_platform.core.automation.actions.webbrowser.open", return_value=True) as open_default:
+            result = actions.open_item("Open customer support")
+        self.assertEqual(result, "Opened Amazon Customer Care help page.")
+        open_default.assert_called_once_with("https://www.amazon.in/gp/help/customer/display.html", new=2)
+
 
 if __name__ == "__main__":
     unittest.main()

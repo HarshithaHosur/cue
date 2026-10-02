@@ -358,6 +358,8 @@ def resolve_support_url(query: str) -> Optional[str]:
         return "https://www.flipkart.com/helpcentre"
     if "meesho" in normalized and any(term in normalized for term in support_terms):
         return "https://support.meesho.com/hc/en-in"
+    if any(term in normalized for term in support_terms):
+        return "https://www.amazon.in/gp/help/customer/display.html"
     return None
 
 
@@ -393,13 +395,17 @@ def open_item(name: str) -> str:
     # Priority 1: Customer support URLs must land on the actual help/support page.
     support_url = resolve_support_url(target_lower)
     if support_url:
+        market_name = (
+            "Amazon" if "amazon.in" in support_url
+            else "Flipkart" if "flipkart.com" in support_url
+            else "Meesho"
+        )
         try:
             if webbrowser.open(support_url, new=2):
-                market_name = "Amazon" if "amazon" in target_lower else "Flipkart" if "flipkart" in target_lower else "Meesho"
                 return f"Opened {market_name} Customer Care help page."
         except Exception:
             pass
-        return f"Could not open the {market_name if 'market_name' in locals() else 'support'} help page."
+        return f"Could not open the {market_name} help page."
 
     # Priority 3 E-Commerce Homepages (Amazon & Meesho)
     if target_lower in ['amazon', 'open amazon', 'amazon.in', 'amazon in']:

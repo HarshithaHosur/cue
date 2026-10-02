@@ -123,6 +123,8 @@ class IntentEngine(QThread):
             except Exception as e:
                 logger.warning(f"[VISION] MediaPipe Holistic init failed: {e}")
                 self.holistic = None
+        if self.holistic is None:
+            self._feature_manager.set_status(Feature.GESTURE, FeatureStatus.UNAVAILABLE.value)
 
     @property
     def is_agent_active(self) -> bool:
@@ -209,9 +211,14 @@ class IntentEngine(QThread):
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
                 cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
                 self._feature_manager.set_status(Feature.VISION, FeatureStatus.RUNNING.value)
+                self._feature_manager.set_status(
+                    Feature.GESTURE,
+                    FeatureStatus.RUNNING.value if self.holistic is not None else FeatureStatus.UNAVAILABLE.value,
+                )
             else:
                 logger.warning("[VISION] Camera unavailable.")
                 self._feature_manager.set_status(Feature.VISION, FeatureStatus.UNAVAILABLE.value)
+                self._feature_manager.set_status(Feature.GESTURE, FeatureStatus.UNAVAILABLE.value)
                 cap = None
 
         prev_time = time.time()
@@ -223,6 +230,7 @@ class IntentEngine(QThread):
                     cap.release()
                     cap = None
                     self._feature_manager.set_status(Feature.VISION, FeatureStatus.DISABLED.value)
+                    self._feature_manager.set_status(Feature.GESTURE, FeatureStatus.UNAVAILABLE.value)
                 time.sleep(0.05)
                 # Attempt camera re-acquisition if re-enabled
                 if self._feature_manager.is_enabled(Feature.VISION) and cap is None:
@@ -231,7 +239,12 @@ class IntentEngine(QThread):
                         cap = cv2.VideoCapture(0)
                     if cap.isOpened():
                         self._feature_manager.set_status(Feature.VISION, FeatureStatus.RUNNING.value)
+                        self._feature_manager.set_status(
+                            Feature.GESTURE,
+                            FeatureStatus.RUNNING.value if self.holistic is not None else FeatureStatus.UNAVAILABLE.value,
+                        )
                     else:
+                        self._feature_manager.set_status(Feature.GESTURE, FeatureStatus.UNAVAILABLE.value)
                         cap = None
                 continue
 
