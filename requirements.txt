@@ -1,4 +1,5 @@
 fastapi>=0.115,<1
+groq>=0.31,<1
 google-generativeai>=0.8,<1
 python-dotenv>=1,<2
 uvicorn[standard]>=0.30,<1

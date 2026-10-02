@@ -1,6 +1,6 @@
 # Browser Web Workspace
 
-The existing PySide6 application remains the full local multimodal desktop agent. The additive browser version lives in `web/frontend` and `web/backend`: React/Vite serves the sign-in and workspace UI, and FastAPI provides session login, status, and text-only Gemini chat. The cloud API does not import the desktop IntentEngine, PySide6 UI, local database, screen capture, OCR, camera, microphone, `pyautogui`, or Windows APIs.
+The existing PySide6 application remains the full local multimodal desktop agent and continues to use Gemini; it does not use the Groq key. The additive browser version lives in `web/frontend` and `web/backend`: React/Vite serves the sign-in and workspace UI, and FastAPI provides session login, status, and text-only AI chat. Website chat uses Groq first and can fall back to Gemini server-side if Groq is unavailable. The cloud API does not import the desktop IntentEngine, PySide6 UI, local database, screen capture, OCR, camera, microphone, `pyautogui`, or Windows APIs.
 
 The web login is a configurable demo account, not the desktop biometric/user database. Set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a random `WEB_SESSION_SECRET` of at least 32 characters. Do not reuse a personal password. For a public judge demo, set `WEB_PUBLIC_DEMO=true`; the dashboard opens without sign-in, and the API permits anonymous web-agent requests. This is an intentionally public, shared demo, not private authentication. When the flag is false or absent, the signed-session login remains required. The web agent supports text conversation only; camera, gestures, microphone, screen understanding, and mouse/keyboard automation remain available only in the local desktop application. The web agent must not be treated as controlling the judge's computer.
 
@@ -8,7 +8,8 @@ The web login is a configurable demo account, not the desktop biometric/user dat
 
 From the repository root (`intent_platform`):
 
-1. Copy `.env.example` to `.env` and fill in `GEMINI_API_KEY`, `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and `WEB_SESSION_SECRET`. `.env` is ignored by Git.
+1. Copy `.env.example` to `.env` and fill in `GEMINI_API_KEY`, `GROQ_API_KEY` (website primary provider), `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and `WEB_SESSION_SECRET`. `.env` is ignored by Git. Get a Groq key from `https://console.groq.com/keys`.
+   After changing provider keys, restart the FastAPI backend so it reads the new environment.
 2. Install the web API dependencies with `python -m pip install -r requirements.txt`.
 3. Start the API in one terminal:
 
@@ -31,18 +32,18 @@ The desktop application remains launched separately with `python main.py` from t
 ## Vercel Deployment
 
 1. Import the `intent_platform` Git repository into Vercel and keep the project root at the repository root. `vercel.json` builds `web/frontend` and routes `/api/*` to the Python FastAPI function at `api/index.py`.
-2. In Vercel Project Settings -> Environment Variables, set `WEB_PUBLIC_DEMO` to `true` for anonymous judge access and set `GEMINI_API_KEY` server-side. Optionally set `GEMINI_MODEL` (the existing default is used otherwise). If public demo mode is disabled, set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a cryptographically random `WEB_SESSION_SECRET` instead. Do not put real values into Git or source files.
+2. In Vercel Project Settings -> Environment Variables, set `WEB_PUBLIC_DEMO` to `true` for anonymous judge access and set `GROQ_API_KEY` server-side for website chat. Optionally set `GROQ_MODEL` (default: `openai/gpt-oss-120b`) and `GEMINI_API_KEY` for website-only backup and the local desktop app. If public demo mode is disabled, set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a cryptographically random `WEB_SESSION_SECRET` instead. Do not put real values into Git, source files, or chat.
 3. Enable the Production environment variables, deploy, and use the generated URL such as `https://intent-os-demo.vercel.app` as the single judge-facing entry point. The root route opens at sign-in; after login, users reach the dashboard and text-only agent.
-4. Check `https://<deployment-domain>/api/status` for web API, login configuration, and Gemini configuration state. It reports booleans only and never returns the key.
+4. Check `https://<deployment-domain>/api/status` for web API, login configuration, and Gemini/Groq provider configuration state. It reports booleans only and never returns either key.
 
-Vercel does not host the PySide6 desktop app and cannot control a judge's local device. Gemini chat needs a valid server-side `GEMINI_API_KEY`; without it the API returns a safe setup message. Demo-account login is intentionally simple and is not a replacement for production identity management, persistent user accounts, rate limiting, or a full auth provider.
+Vercel does not host the PySide6 desktop app and cannot control a judge's local device. Website AI chat needs at least one valid server-side `GROQ_API_KEY` or `GEMINI_API_KEY`; Groq is tried first, and Gemini is used as a website-only backup when configured. The desktop application continues to use Gemini directly and never uses Groq. Demo-account login is intentionally simple and is not a replacement for production identity management, persistent user accounts, rate limiting, or a full auth provider.
 
 ## Web API
 
 - `GET /api/status`: public health/configuration and capability status.
 - `POST /api/login`: validates configured demo credentials and sets a signed HttpOnly session cookie.
 - `POST /api/logout`: expires the authenticated session.
-- `POST /api/chat`: authenticated text-only Gemini conversation; never executes desktop actions.
+- `POST /api/chat`: authenticated text-only AI conversation (Groq primary, optional Gemini backup); never executes desktop actions.
 - `POST /api/agent`: authenticated web-agent status response; it explicitly does not activate the local desktop agent.
 
 # CUE – Contextual Unified Experience

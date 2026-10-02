@@ -68,7 +68,9 @@ def get_status(request: Request):
         "authenticated": authenticated,
         "public_demo": public_demo,
         "web_login_configured": login_ready,
-        "gemini_configured": ai_ready,
+        "ai_configured": ai_ready,
+        "gemini_configured": cloud_agent.gemini_configured,
+        "groq_configured": cloud_agent.groq_configured,
         "capabilities": ["text chat", "AI reasoning", "web dashboard", "session status"],
         "desktop_only": [
             "screen understanding", "camera and gesture control", "microphone voice control",
@@ -94,7 +96,7 @@ def post_chat(payload: ChatRequest, username: str = Depends(require_user)):
     if not cloud_agent.configured:
         raise HTTPException(
             status_code=503,
-            detail={"code": "gemini_not_configured", "message": "AI chat is unavailable until GEMINI_API_KEY is configured."},
+            detail={"code": "ai_not_configured", "message": "AI chat is unavailable until GEMINI_API_KEY or GROQ_API_KEY is configured on the server."},
         )
     history = [{"role": item.role, "content": item.content} for item in payload.history]
     try:

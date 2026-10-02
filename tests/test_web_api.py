@@ -1,9 +1,11 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 try:
+    import google.generativeai as genai
     from fastapi.testclient import TestClient
     from web.backend.cloud_agent import CloudAgent, CloudAgentError
     from web.backend.main import app
@@ -23,6 +25,7 @@ class WebApiTests(unittest.TestCase):
             "WEB_DEMO_PASSWORD": "unique-test-password",
             "WEB_SESSION_SECRET": "test-only-session-secret-at-least-32-chars",
             "GEMINI_API_KEY": "test-only-key",
+            "GROQ_API_KEY": "",
             "WEB_PUBLIC_DEMO": "false",
         })
         self.env.start()
@@ -35,16 +38,34 @@ class WebApiTests(unittest.TestCase):
             self.env.stop()
 
     def test_status_lists_web_and_desktop_capabilities_without_secrets(self):
-        response = self.client.get("/api/status")
+        with patch("web.backend.main.cloud_agent.groq_api_key", ""):
+            response = self.client.get("/api/status")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["web_login_configured"])
         self.assertTrue(body["gemini_configured"])
+        self.assertTrue(body["ai_configured"])
+        self.assertFalse(body["groq_configured"])
         self.assertFalse(body["authenticated"])
         self.assertFalse(body["public_demo"])
         self.assertEqual(body["status"], "available")
         self.assertIn("camera and gesture control", body["desktop_only"])
         self.assertNotIn("test-only-key", response.text)
+
+    def test_status_reports_groq_only_as_an_available_web_ai_provider(self):
+        with (
+            patch("web.backend.main.cloud_agent.api_key", ""),
+            patch("web.backend.main.cloud_agent.groq_api_key", "test-groq-key"),
+        ):
+            response = self.client.get("/api/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ai_configured"])
+        self.assertFalse(body["gemini_configured"])
+        self.assertTrue(body["groq_configured"])
+        self.assertEqual(body["status"], "available")
+        self.assertNotIn("test-groq-key", response.text)
 
     def test_backend_does_not_import_desktop_modules(self):
         imported_desktop_modules = [
@@ -137,10 +158,13 @@ class WebApiTests(unittest.TestCase):
 
     def test_chat_missing_gemini_key_returns_safe_setup_error(self):
         self.client.post("/api/login", json={"username": "judge", "password": "unique-test-password"})
-        with patch("web.backend.main.cloud_agent.api_key", ""):
+        with (
+            patch("web.backend.main.cloud_agent.api_key", ""),
+            patch("web.backend.main.cloud_agent.groq_api_key", ""),
+        ):
             response = self.client.post("/api/chat", json={"message": "hello"})
         self.assertEqual(response.status_code, 503)
-        self.assertIn("GEMINI_API_KEY", response.json()["detail"]["message"])
+        self.assertIn("GROQ_API_KEY", response.json()["detail"]["message"])
         self.assertNotIn("test-only-key", response.text)
 
     def test_chat_returns_safe_quota_message(self):
@@ -175,6 +199,123 @@ class WebApiTests(unittest.TestCase):
 
         self.assertNotIn("private provider detail", str(error.exception))
         self.assertNotIn("test-only-key", str(error.exception))
+
+    def test_cloud_agent_sends_project_context_to_gemini(self):
+        class FakeChat:
+            def send_message(self, message):
+                self.message = message
+                return type("FakeResponse", (), {"text": "Gemini-generated project explanation."})()
+
+        agent = CloudAgent()
+        agent.api_key = "test-only-key"
+        agent.model_name = "gemini-2.5-flash"
+        with (
+            patch.object(genai, "configure"),
+            patch.object(genai, "GenerativeModel") as model_factory,
+        ):
+            fake_chat = FakeChat()
+            model_factory.return_value.start_chat.return_value = fake_chat
+            answer = agent.reply("What is Intent OS?", [])
+
+        self.assertEqual(answer, "Gemini-generated project explanation.")
+        self.assertIn("UNDERSTAND → OBSERVE → DECIDE → EXECUTE → VERIFY", model_factory.call_args.kwargs["system_instruction"])
+        self.assertIn("AI interview assistance", model_factory.call_args.kwargs["system_instruction"])
+        self.assertEqual(fake_chat.message, "What is Intent OS?")
+
+    def test_cloud_agent_uses_groq_for_web_chat_and_keeps_key_server_side(self):
+        agent = CloudAgent()
+        agent.api_key = ""
+        agent.groq_api_key = "test-groq-key"
+        agent.groq_model = "llama-test-model"
+        with patch("groq.Groq") as groq_client:
+            groq_client.return_value.chat.completions.create.return_value = SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="Groq-generated desktop explanation."),
+                )],
+            )
+            answer = agent.reply(
+                "What can the desktop app do?",
+                [{"role": "user", "content": "Tell me about Intent OS."}],
+            )
+
+        self.assertEqual(answer, "Groq-generated desktop explanation.")
+        groq_client.assert_called_once_with(api_key="test-groq-key", timeout=30, max_retries=0)
+        call = groq_client.return_value.chat.completions.create.call_args.kwargs
+        self.assertEqual(call["model"], "llama-test-model")
+        self.assertIn("UNDERSTAND → OBSERVE → DECIDE → EXECUTE → VERIFY", call["messages"][0]["content"])
+        self.assertEqual(call["messages"][1]["content"], "Tell me about Intent OS.")
+        self.assertNotIn("test-groq-key", answer)
+
+    def test_cloud_agent_prefers_groq_for_website_when_both_providers_are_configured(self):
+        agent = CloudAgent()
+        agent.api_key = "test-gemini-key"
+        agent.groq_api_key = "test-groq-key"
+        with (
+            patch.object(agent, "_reply_with_groq", return_value="Groq website answer.") as groq_reply,
+            patch.object(agent, "_reply_with_gemini", return_value="Gemini answer.") as gemini_reply,
+        ):
+            answer = agent.reply("What does the desktop app do?", [])
+
+        self.assertEqual(answer, "Groq website answer.")
+        groq_reply.assert_called_once_with("What does the desktop app do?", [])
+        gemini_reply.assert_not_called()
+
+    def test_cloud_agent_uses_gemini_for_website_only_if_groq_fails(self):
+        agent = CloudAgent()
+        agent.api_key = "test-gemini-key"
+        agent.groq_api_key = "test-groq-key"
+        with (
+            patch.object(
+                agent,
+                "_reply_with_groq",
+                side_effect=CloudAgentError("Groq is currently rate-limited or out of quota."),
+            ) as groq_reply,
+            patch.object(agent, "_reply_with_gemini", return_value="Gemini website backup.") as gemini_reply,
+        ):
+            answer = agent.reply("What does the desktop app do?", [])
+
+        self.assertEqual(answer, "Gemini website backup.")
+        groq_reply.assert_called_once()
+        gemini_reply.assert_called_once_with("What does the desktop app do?", [])
+
+    def test_cloud_agent_returns_clear_groq_rate_limit_error(self):
+        agent = CloudAgent()
+        agent.api_key = ""
+        agent.groq_api_key = "test-groq-key"
+        class ProviderError(Exception):
+            status_code = 429
+
+        with patch("groq.Groq") as groq_client:
+            groq_client.return_value.chat.completions.create.side_effect = ProviderError(
+                "private details test-groq-key",
+            )
+            with self.assertRaises(CloudAgentError) as error:
+                agent.reply("hello", [])
+
+        self.assertIn("rate-limited or out of quota", str(error.exception))
+        self.assertNotIn("test-groq-key", str(error.exception))
+
+    def test_cloud_agent_explains_cloudflare_block_without_revealing_key(self):
+        agent = CloudAgent()
+        agent.api_key = ""
+        agent.groq_api_key = "test-groq-key"
+
+        class ProviderResponse:
+            text = '{"error_code":1010,"error_name":"browser_signature_banned"}'
+
+        class ProviderError(Exception):
+            status_code = 403
+            response = ProviderResponse()
+
+        with patch("groq.Groq") as groq_client:
+            groq_client.return_value.chat.completions.create.side_effect = ProviderError(
+                "private details test-groq-key",
+            )
+            with self.assertRaises(CloudAgentError) as error:
+                agent.reply("hello", [])
+
+        self.assertIn("network is blocking this Groq request", str(error.exception))
+        self.assertNotIn("test-groq-key", str(error.exception))
 
     def test_logout_expires_the_session(self):
         self.client.post("/api/login", json={"username": "judge", "password": "unique-test-password"})
