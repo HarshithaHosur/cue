@@ -35,6 +35,8 @@ from PySide6.QtCore import QCoreApplication
 
 from intent_platform.core.support.page_analyzer import SupportPageAnalyzer
 from intent_platform.core.support.support_agent import CustomerSupportAgent
+from intent_platform.core.techsupport.tech_support_agent import TechnicalSupportAgent
+from intent_platform.core.support.safety_manager import SafetyManager
 from intent_platform.core.techsupport.software_installer import SoftwareInstallationAssistant
 import intent_platform.core.support.page_analyzer as page_analyzer_module
 import intent_platform.core.support.support_agent as support_agent_module
@@ -157,6 +159,9 @@ class AgentWorkflowTests(unittest.TestCase):
 
     def setUp(self):
         self.agent = CustomerSupportAgent()
+        self.browser_guard = patch.object(self.agent, "_ensure_browser_for_support_request", return_value=True)
+        self.browser_guard.start()
+        self.addCleanup(self.browser_guard.stop)
         self.real_screen_intelligence = self.agent.screen_intelligence
         self.real_screen_intelligence.stop()
         self.screen = SyntheticScreenIntelligence()
@@ -165,8 +170,12 @@ class AgentWorkflowTests(unittest.TestCase):
         self.agent.conversation_store = SyntheticConversationStore()
         self.responses = []
         self.confirmations = []
+        self.executed_actions = []
         self.agent.signals.response_ready.connect(lambda text, voice: self.responses.append(text))
         self.agent.signals.confirmation_required.connect(self.confirmations.append)
+        self.agent.signals.action_executed.connect(
+            lambda action, message: self.executed_actions.append((action, message))
+        )
 
     def tearDown(self):
         self.real_screen_intelligence.stop()
@@ -211,10 +220,11 @@ class AgentWorkflowTests(unittest.TestCase):
             patch.object(support_agent_module.pyautogui, "click", side_effect=self._click_changes_screen),
         ):
             self.agent._run_pipeline("Open customer support")
-            self.assertEqual(self.screen.calls[-1]["state"], "home")
-            self.assertEqual(self.confirmations[-1]["target_label"], "Customer Support")
-
-            self.agent.confirm_pending_action()
+            self.assertEqual(self.screen.calls[0]["state"], "home")
+            self.assertEqual(self.screen.calls[-1]["state"], "support")
+            self.assertEqual(self.confirmations, [])
+            self.assertEqual(self.executed_actions[0][0], "click")
+            self.assertIn("Customer Support", self.executed_actions[0][1])
             self.assertEqual(self.screen.calls[-1]["state"], "support")
             self.assertEqual(self.screen.calls[-1]["command"], "Open customer support")
 
@@ -238,7 +248,7 @@ class AgentWorkflowTests(unittest.TestCase):
             self.assertEqual(self.screen.calls[-1]["state"], "reason_selected")
             self.assertEqual(self.agent.task_state["status"], "completed")
 
-        self.assertEqual(len(self.confirmations), 3)
+        self.assertEqual(len(self.confirmations), 2)
         self.assertTrue(any("return" in response.lower() for response in self.responses))
 
     def test_analysis_failure_is_safe_and_does_not_log_provider_details(self):
@@ -259,11 +269,62 @@ class AgentWorkflowTests(unittest.TestCase):
         self.assertFalse(self.agent.safety_manager.has_pending_action())
         self.assertNotIn("synthetic capture failure", self.responses[-1])
 
-    def test_new_request_supersedes_old_confirmation(self):
+    def test_default_browser_launch_waits_for_browser_or_reports_failure(self):
+        with (
+            patch.object(support_agent_module.SupportContextDetector, "detect_context", return_value={
+                "is_browser": False, "website": "General Website",
+            }),
+            patch.object(support_agent_module.SupportContextDetector, "get_active_window_info", side_effect=[
+                {"is_browser": False}, {"is_browser": True},
+            ]),
+            patch.object(support_agent_module.actions, "open_item", return_value="Opened browser") as launch,
+            patch.object(support_agent_module.time, "sleep", return_value=None),
+        ):
+            self.assertTrue(CustomerSupportAgent._ensure_browser_for_support_request(
+                self.agent, "Open customer support"
+            ))
+        launch.assert_called_once_with("browser")
+
+        with (
+            patch.object(support_agent_module.SupportContextDetector, "detect_context", return_value={
+                "is_browser": False, "website": "General Website",
+            }),
+            patch.object(support_agent_module.actions, "open_item", return_value="Could not find or open 'browser'"),
+        ):
+            self.assertFalse(CustomerSupportAgent._ensure_browser_for_support_request(
+                self.agent, "Open customer care"
+            ))
+        self.assertEqual(self.agent.task_state["status"], "blocked")
+        self.assertIn("couldn't open a browser", self.responses[-1].lower())
+
+    def test_technical_support_analysis_failure_is_visible_in_chat(self):
+        agent = TechnicalSupportAgent()
+        self.addCleanup(agent.screen_intelligence.stop)
+        agent.screen_intelligence.stop()
+        agent._ensure_browser_for_support_request = lambda _command: True
+        agent.screen_intelligence = Mock()
+        agent.screen_intelligence.current_context = {"website": "Shop", "page_type": "Home"}
+        agent.screen_intelligence.get_screen_understanding.side_effect = TimeoutError("private provider detail")
+        responses = []
+        agent.signals.response_ready.connect(lambda text, voice: responses.append((text, voice)))
+
+        with patch("intent_platform.core.techsupport.tech_support_agent.time.sleep", return_value=None):
+            agent._run_standard_customer_support_pipeline("Open customer support")
+
+        self.assertEqual(agent.task_state["status"], "blocked")
+        self.assertTrue(responses)
+        self.assertIn("I couldn't analyze the current screen", responses[-1][0])
+        self.assertNotIn("private provider detail", responses[-1][0])
+
+    def test_support_open_executes_and_new_return_request_requires_confirmation(self):
         self._mock_capture_and_ocr()
-        with patch.object(support_agent_module.time, "sleep", return_value=None):
+        with (
+            patch.object(support_agent_module.time, "sleep", return_value=None),
+            patch.object(support_agent_module.pyautogui, "click", side_effect=self._click_changes_screen),
+        ):
             self.agent._run_pipeline("Open customer support")
-            self.assertTrue(self.agent.safety_manager.has_pending_action())
+            self.assertFalse(self.agent.safety_manager.has_pending_action())
+            self.assertEqual(self.screen.ui_state, "support")
             self.screen.ui_state = "support"
             self.agent._run_pipeline("I want to return this product")
         self.assertEqual(self.screen.calls[-1]["command"], "I want to return this product")
@@ -357,6 +418,116 @@ class AgentWorkflowTests(unittest.TestCase):
         self.assertIn("desktop action failed", self.responses[-1])
         self.assertNotIn("synthetic private OS detail", self.responses[-1])
         self.assertNotIn("Clicked 'Customer Support'", self.responses)
+
+    def test_support_and_complaint_outcomes_require_fresh_screen_evidence(self):
+        self.agent.task_state["goal"] = "Open customer support"
+        self.agent.task_state["last_action"] = {
+            "action": "click", "target": "Customer Support", "status": "executed",
+        }
+        not_open, _ = self.agent._verify_observed_action(
+            {"screen_context": {"current_page": "Home", "full_text": "Shop home"}},
+            {"is_support_page": False},
+        )
+        opened, _ = self.agent._verify_observed_action(
+            {"screen_context": {"current_page": "Customer Support", "full_text": "How can we help?"}},
+            {"is_support_page": True},
+        )
+        self.assertFalse(not_open)
+        self.assertTrue(opened)
+
+        self.agent.task_state["goal"] = "Submit complaint"
+        self.agent.task_state["last_action"] = {
+            "action": "click", "target": "Submit complaint", "status": "executed",
+        }
+        submitted, _ = self.agent._verify_observed_action(
+            {"screen_context": {"current_page": "Complaint form", "full_text": "Please wait"}}, {},
+        )
+        verified, _ = self.agent._verify_observed_action(
+            {"screen_context": {"current_page": "Complaint result", "full_text": "Complaint submitted. Ticket number 12345"}}, {},
+        )
+        self.assertFalse(submitted)
+        self.assertTrue(verified)
+
+    def test_final_submit_requires_explicit_stage_and_visible_ticket_result(self):
+        self.agent.task_state["goal"] = "Raise a complaint"
+        self.agent.task_state["last_action"] = {
+            "action": "click",
+            "target": "Raise complaint",
+            "status": "executed",
+            "details": {"action_stage": "form"},
+        }
+        form_open, _ = self.agent._verify_observed_action(
+            {"screen_context": {"full_text": "Complaint details"}}, {},
+        )
+        self.agent.task_state["last_action"]["details"]["action_stage"] = "final_submit"
+        pending, _ = self.agent._verify_observed_action(
+            {"screen_context": {"full_text": "Submitting complaint"}}, {},
+        )
+        result, _ = self.agent._verify_observed_action(
+            {"screen_context": {"full_text": "Complaint submitted. Ticket number ABC123"}}, {},
+        )
+        self.assertTrue(form_open)
+        self.assertFalse(pending)
+        self.assertTrue(result)
+
+    def test_open_support_executes_and_verifies_for_base_and_technical_agents(self):
+        for agent_type in (CustomerSupportAgent, TechnicalSupportAgent):
+            with self.subTest(agent_type=agent_type.__name__):
+                agent = agent_type()
+                self.addCleanup(agent.screen_intelligence.stop)
+                agent.screen_intelligence.stop()
+                agent._ensure_browser_for_support_request = lambda _command: True
+                observed_pages = iter(("Home", "Customer Support"))
+                agent.screen_intelligence.current_context = {"website": "Shop", "page_type": "Home"}
+
+                def understand(command, **_kwargs):
+                    page = next(observed_pages)
+                    agent.screen_intelligence.current_context = {
+                        "website": "Shop",
+                        "page_type": page,
+                        "is_support_page": page == "Customer Support",
+                    }
+                    if page == "Home":
+                        target = {"found": True, "label": "Customer Support", "type": "button", "x": 80, "y": 60, "w": 120, "h": 30, "confidence": 0.99}
+                        suggestion = "click"
+                        explanation = "I found Customer Support. Opening it now."
+                    else:
+                        target = {"found": False}
+                        suggestion = "explain"
+                        explanation = "Customer Support is open. What do you need help with?"
+                    return {
+                        "screen_context": {"current_page": page, "full_text": "Customer Support" if page == "Customer Support" else "Shop home"},
+                        "target_element": target,
+                        "explanation_text": explanation,
+                        "explanation_voice": explanation,
+                        "suggested_action": suggestion,
+                        "workflow_completed": False,
+                        "confidence_verified": True,
+                        "window_title": "Synthetic Shop",
+                    }
+
+                agent.screen_intelligence.get_screen_understanding = Mock(side_effect=understand)
+                agent._revalidate_pending_target = Mock(return_value=True)
+                responses = []
+                executed = []
+                agent.signals.response_ready.connect(lambda text, _voice: responses.append(text))
+                agent.signals.action_executed.connect(lambda name, result: executed.append((name, result)))
+                with (
+                    patch.object(support_agent_module.time, "sleep", return_value=None),
+                    patch.object(support_agent_module.pyautogui, "click") as click,
+                ):
+                    agent._run_pipeline("Open customer support") if agent_type is CustomerSupportAgent else agent._run_standard_customer_support_pipeline("Open customer support")
+
+                click.assert_called_once_with(80, 60)
+                self.assertEqual(agent.screen_intelligence.get_screen_understanding.call_count, 2)
+                self.assertTrue(any("Customer Support is open" in response for response in responses))
+                self.assertTrue(executed)
+                self.assertFalse(agent.safety_manager.has_pending_action())
+
+    def test_form_fill_requires_value_from_user_history(self):
+        self.agent.conversation_history[:] = [{"role": "user", "content": "My order number is 12345"}]
+        self.assertTrue(self.agent._user_provided_value("12345", self.agent.conversation_history))
+        self.assertFalse(self.agent._user_provided_value("99999", self.agent.conversation_history))
 
     def test_software_installation_plan_and_mocked_results(self):
         with tempfile.TemporaryDirectory(prefix="intent-install-test-") as directory:

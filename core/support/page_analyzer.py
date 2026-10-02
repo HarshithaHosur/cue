@@ -106,8 +106,9 @@ GUIDELINES:
 2. Explain what you observe on screen, which button or section you found, and why.
 3. If the user asks to open cart, returns, or support, locate the exact coordinates of that button from visible_buttons or the visual image.
 4. If an error is visible, explain the root cause and recommend the exact fix.
-5. Provide both:
-   - "explanation_text": Comprehensive, structured message for the UI conversation panel.
+5. For complaint/help forms, determine required fields from the current screenshot and OCR. If information is missing, ask the user instead of guessing. Only propose fill/select for one visible field when its exact value was provided by the user in conversation history; return that exact text in field_value. Never invent order IDs, product names, complaint reasons, addresses, or personal details. Set action_stage to final_submit only when the visible target will submit the complaint; final submission requires explicit confirmation. Re-observe after every action before reporting the result.
+6. Provide both:
+    - "explanation_text": Comprehensive, structured message for the UI conversation panel.
    - "explanation_voice": Warm, natural spoken response for voice TTS (2-3 natural sentences with follow-up guidance).
 
 Analyze the visible screen, the user's spoken request: "{command}", and return valid JSON conforming to this schema:
@@ -120,6 +121,8 @@ Analyze the visible screen, the user's spoken request: "{command}", and return v
     "selected_item": "string or empty when no item is selected",
     "dialogs": [],
     "warnings": [],
+    "field_value": "exact user-provided value for suggested_action=fill or select; otherwise empty",
+    "action_stage": "navigate|form|final_submit|none",
   "reasoning_steps": [
     "👀 Detected <Website> <Page Type>",
     "🔍 Locating <Target Button/Element>",
@@ -138,7 +141,7 @@ Analyze the visible screen, the user's spoken request: "{command}", and return v
   }},
     "explanation_text": "string (professional chat response)",
     "explanation_voice": "string (natural spoken response)",
-    "suggested_action": "click|highlight|scroll|explain",
+    "suggested_action": "click|fill|select|highlight|scroll|explain",
     "scroll_direction": "up|down|none",
   "risk_level": "SAFE|MEDIUM_RISK|HIGH_RISK",
   "requires_confirmation": true|false,
@@ -179,8 +182,11 @@ Return ONLY valid JSON. No markdown code blocks.
                             for key in required_text
                         ):
                             raise ValueError("Gemini returned an incomplete screen analysis")
-                        if parsed["suggested_action"] not in {"click", "highlight", "scroll", "explain"}:
+                        if parsed["suggested_action"] not in {"click", "fill", "select", "highlight", "scroll", "explain"}:
                             raise ValueError("Gemini returned an unsupported action")
+                        if parsed["suggested_action"] in {"fill", "select"}:
+                            if not isinstance(parsed.get("field_value"), str) or not parsed["field_value"].strip():
+                                raise ValueError("Gemini returned a form action without a value")
                         return parsed
                 except Exception as e:
                     print(f"[PageAnalyzer] Gemini model {model_name} failed ({type(e).__name__}).")

@@ -337,8 +337,10 @@ class TechnicalSupportAgent(CustomerSupportAgent):
     # ────────────────────────────────────────────
     #  CONFIRM & CANCEL HANDLERS (MODULE 6: PERMISSION)
     # ────────────────────────────────────────────
-    def confirm_pending_action(self):
+    def confirm_pending_action(self, approved_action: Optional[Dict[str, Any]] = None):
         """User approved pending action via voice 'Continue' or UI button."""
+        if approved_action is not None:
+            return super().confirm_pending_action(approved_action)
         if self.active_tech_action:
             action = self.active_tech_action
             self.active_tech_action = None
@@ -510,6 +512,9 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         for all general web, UI automation, and application questions.
         """
         # Call base implementation of screen analysis & actions
+        if not self._ensure_browser_for_support_request(command):
+            return
+
         # 1. Listen & Acknowledge
         self.update_companion("listening", "Listening to your request...")
         time.sleep(0.3)
@@ -527,8 +532,12 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         except Exception as error:
             print(f"[TechnicalSupportAgent] Screen analysis failed ({type(error).__name__}).")
             message = "I couldn't analyze the current screen, so I took no action. Check the AI connection or try again."
+            self.task_state["status"] = "blocked"
             self.update_companion("error", message)
             self.signals.reasoning_step.emit(message)
+            self.signals.response_ready.emit(message, message)
+            self._record_assistant_response(message, status="failed")
+            self.speak(message)
             self.audit_logger.log(
                 f"Screen analysis failed ({type(error).__name__})",
                 category="ANALYSIS_ERROR",
@@ -579,11 +588,9 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             self.signals.reasoning_step.emit(f"🎯 Highlighting '{target_label}'")
             highlight_element(target_x, target_y, target_w, target_h, target_label)
 
-        # 5. Formulate Multimodal Responses
+        # 5. Plan the action before reporting its outcome
         explanation_text = analysis["explanation_text"]
         explanation_voice = analysis["explanation_voice"]
-
-        self.signals.response_ready.emit(explanation_text, explanation_voice)
 
         # 6. Safety & Permission Assessment
         suggested_action = analysis.get("suggested_action", "highlight")
@@ -593,6 +600,16 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             target_label=target_label,
             details=analysis
         )
+        auto_open_support = (
+            suggested_action == "click"
+            and self._is_open_support_request(command)
+            and target_found
+            and action_payload["requires_confirmation"]
+        )
+        if auto_open_support:
+            action_payload["requires_confirmation"] = False
+            action_payload["confirmation_prompt"] = ""
+            action_payload["user_confirmed"] = True
         self.task_state["screen"] = analysis.get("screen_context", {})
         self.task_state["last_action"] = {
             "action": suggested_action,
@@ -613,11 +630,17 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         if requires_confirm:
             confirm_prompt = action_payload["confirmation_prompt"]
             full_voice = f"{explanation_voice} {confirm_prompt}".strip()
+            full_text = f"{explanation_text}\n\nConfirmation: {confirm_prompt}"
+            self.signals.response_ready.emit(full_text, full_voice)
             self.update_companion("waiting", confirm_prompt or "Waiting for your confirmation...")
             self.signals.reasoning_step.emit(f"🖱️ Waiting for your confirmation to continue ({risk_level})")
             self.signals.confirmation_required.emit(action_payload)
             self.speak(full_voice)
+        elif auto_open_support:
+            self.update_companion("thinking", "Opening the verified Customer Support option...")
+            self.confirm_pending_action(action_payload)
         else:
+            self.signals.response_ready.emit(explanation_text, explanation_voice)
             self.update_companion("speaking", explanation_voice)
             self.speak(explanation_voice)
             self._execute_action_direct(action_payload)

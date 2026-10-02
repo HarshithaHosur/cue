@@ -436,6 +436,10 @@ class VoiceEngine:
             elif intent == 'reset_zoom':
                 return actions.reset_zoom()
 
+            # Customer support is handled by the shared screen-aware agent in the UI.
+            elif intent == 'support_agent':
+                return "Routing your request to the screen-aware Customer Support Agent."
+
             # 7. System Power Commands
             elif intent == 'lock_workstation':
                 return actions.lock_workstation()

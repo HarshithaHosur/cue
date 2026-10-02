@@ -334,6 +334,33 @@ def open_amazon() -> str:
     return "Opened official Amazon homepage."
 
 
+def resolve_support_url(query: str) -> Optional[str]:
+    """Maps customer support requests to the website's official help page."""
+    if not query:
+        return None
+
+    normalized = " ".join(str(query).casefold().split())
+    support_terms = (
+        "customer care",
+        "customer support",
+        "customer service",
+        "help center",
+        "support center",
+        "help",
+        "support",
+        "contact support",
+        "contact us",
+    )
+
+    if "amazon" in normalized and any(term in normalized for term in support_terms):
+        return "https://www.amazon.in/gp/help/customer/display.html"
+    if "flipkart" in normalized and any(term in normalized for term in support_terms):
+        return "https://www.flipkart.com/helpcentre"
+    if "meesho" in normalized and any(term in normalized for term in support_terms):
+        return "https://support.meesho.com/hc/en-in"
+    return None
+
+
 def open_meesho() -> str:
     """
     Priority 3: Opens official Meesho homepage.
@@ -363,11 +390,30 @@ def open_item(name: str) -> str:
     target = name.strip()
     target_lower = target.lower()
 
+    # Priority 1: Customer support URLs must land on the actual help/support page.
+    support_url = resolve_support_url(target_lower)
+    if support_url:
+        try:
+            if webbrowser.open(support_url, new=2):
+                market_name = "Amazon" if "amazon" in target_lower else "Flipkart" if "flipkart" in target_lower else "Meesho"
+                return f"Opened {market_name} Customer Care help page."
+        except Exception:
+            pass
+        return f"Could not open the {market_name if 'market_name' in locals() else 'support'} help page."
+
     # Priority 3 E-Commerce Homepages (Amazon & Meesho)
     if target_lower in ['amazon', 'open amazon', 'amazon.in', 'amazon in']:
         return open_amazon()
     if target_lower in ['meesho', 'open meesho', 'meesho.com']:
         return open_meesho()
+
+    if target_lower in ['browser', 'default browser', 'web browser']:
+        try:
+            if webbrowser.open("about:blank", new=2):
+                return "Opened the default browser."
+        except Exception:
+            pass
+        return "Could not open the default browser."
 
     # Tab handling redirects
     if target_lower in ['new tab', 'open tab', 'open a tab', 'open new tab', 'create tab']:

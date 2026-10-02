@@ -123,6 +123,10 @@ TRAINING_CORPUS = {
         'download my statement', 'download statement', 'help me with this order',
         'replace this', 'return this', 'what is this page',
         'order is wrong', 'damaged product', 'complaint about my order',
+        'open customer care', 'customer care', 'customer service',
+        'i need customer support', 'i need customer care', 'i need customer service',
+        'i need help', 'raise a complaint', 'raise complaint', 'file a complaint',
+        'file complaint', 'i want to complain about this order', 'complain about this order',
         # Technical Support Executive Triggers
         'install python', 'install vs code', 'install git', 'install java',
         'install node', 'install docker', 'install software', 'download installer',
@@ -187,6 +191,17 @@ class VoiceIntentClassifier:
         text = self.normalize_text(raw_text)
         if not text:
             return None
+
+        support_phrases = (
+            'customer support', 'customer care', 'customer service',
+            'raise a complaint', 'raise complaint', 'file a complaint',
+            'file complaint', 'complain about this order',
+        )
+        if any(phrase in text for phrase in support_phrases):
+            return 'support_agent', 1.0, None
+        confirmation_text = re.sub(r"[^\w\s]", "", text).strip()
+        if confirmation_text in {'yes', 'yes please', 'sure', 'go ahead', 'go ahead please', 'do it', 'confirm', 'continue', 'proceed'}:
+            return 'support_agent', 1.0, None
 
         # ── 1. Priority Pattern Matching for Specific Prompt Requirements ──
 

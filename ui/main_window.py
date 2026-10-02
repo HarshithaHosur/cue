@@ -395,18 +395,28 @@ class MainWindow(QMainWindow):
         cmd_lower = command.lower().strip()
         support_triggers = [
             'help me', 'replace', 'return', 'refund', 'explain this', 'explain page',
-            'customer support', 'support', 'order', 'complaint', 'contact',
+            'customer support', 'customer care', 'customer service', 'support', 'order',
+            'complaint', 'complain', 'contact',
             'amazon', 'meesho', 'cart', 'returns', 'help',
             'download statement', 'statement', 'scroll down', 'scroll up',
             'highlight', 'fill this form', 'summarize', 'policy',
-            'continue', 'confirm', 'proceed', 'yes', 'stop', 'cancel', 'abort', 'no',
+            'continue', 'confirm', 'proceed', 'stop', 'cancel', 'abort', 'no',
             'cold', 'delayed', 'wrong', 'damaged',
             # Technical Support Executive Voice Triggers
             'install', 'installer', 'python', 'vscode', 'vs code', 'node', 'git', 'docker',
             'error', 'traceback', 'syntaxerror', 'modulenotfound', 'terminal',
             'wifi', 'wi-fi', 'network', 'internet', 'battery', 'charge', 'power saver'
         ]
-        if any(kw in cmd_lower for kw in support_triggers):
+        import re
+        confirmation_text = re.sub(r"[^\w\s]", "", cmd_lower).strip()
+        confirmation_phrases = {"yes", "yes please", "sure", "go ahead", "go ahead please", "do it"}
+        has_pending_action = (
+            self.support_agent.safety_manager.has_pending_action()
+            or bool(getattr(self.support_agent, "active_tech_action", None))
+        )
+        if any(kw in cmd_lower for kw in support_triggers) or (
+            confirmation_text in confirmation_phrases and has_pending_action
+        ):
             # Route to agent dashboard and display there
             agent_dash = self.page_support.agent_dashboard
             agent_dash.add_user_message(command)

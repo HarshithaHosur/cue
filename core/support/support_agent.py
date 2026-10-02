@@ -7,6 +7,7 @@
 
 import time
 import threading
+import re
 from typing import Dict, Any, Optional, List
 from PySide6.QtCore import QObject, Signal, Slot
 import pyautogui
@@ -20,6 +21,7 @@ from intent_platform.core.support.audit_logger import global_audit_logger
 from intent_platform.core.support.page_analyzer import SupportPageAnalyzer
 from intent_platform.core.support.screen_intelligence_service import ScreenIntelligenceService
 from intent_platform.core.support.conversation_store import ConversationStore
+from intent_platform.core.automation import actions
 
 
 class CustomerSupportAgentSignals(QObject):
@@ -101,6 +103,144 @@ class CustomerSupportAgent(QObject):
         if self.companion and hasattr(self.companion, "update_companion_state"):
             self.companion.update_companion_state(state, message)
 
+    @staticmethod
+    def _is_customer_support_request(command: str) -> bool:
+        text = " ".join(command.casefold().split())
+        return any(term in text for term in (
+            "customer support", "customer care", "customer service", "contact support",
+            "raise a complaint", "raise complaint", "file a complaint", "file complaint",
+            "complain about", "complaint", "return this", "return my", "refund",
+            "track this", "track my order", "cancel this", "cancel my order", "my order",
+            "help me with this order",
+        ))
+
+    @staticmethod
+    def _is_open_support_request(command: str) -> bool:
+        text = " ".join(command.casefold().split())
+        asks_to_open = any(phrase in text for phrase in (
+            "open ", "go to ", "navigate to ", "take me to ", "i need ", "i want ",
+        ))
+        names_support = any(phrase in text for phrase in (
+            "customer support", "customer care", "customer service",
+        ))
+        return asks_to_open and names_support
+
+    def _verify_observed_action(self, analysis: Dict[str, Any], context: Dict[str, Any]):
+        action = self.task_state.get("last_action") or {}
+        if action.get("status") != "executed":
+            return True, ""
+
+        target = str(action.get("target", ""))
+        observed = self._screen_text(analysis)
+        if self._is_open_support_request(str(self.task_state.get("goal", ""))):
+            support_visible = bool(context.get("is_support_page")) or any(term in observed for term in (
+                "customer support", "customer service", "customer care", "help center",
+                "help centre", "contact us", "how can we help",
+            ))
+            if not support_visible:
+                return False, "I performed the navigation click, but the fresh screen does not show Customer Support or Help. I can't report it as opened. Please tell me which shop is open or what you see now."
+
+        if action.get("action") == "fill":
+            details = action.get("details", {})
+            value = str(details.get("field_value", "")).strip()
+            if value and value.casefold() not in observed:
+                return False, "I attempted to enter the information, but I can't verify it in the fresh screen observation. I haven't marked that field as completed. Please check the field before continuing."
+
+        target_lower = target.casefold()
+        details = action.get("details", {})
+        is_submit_target = (
+            details.get("action_stage") == "final_submit"
+            or "submit" in target_lower
+            or "send complaint" in target_lower
+        )
+        if action.get("action") == "click" and is_submit_target:
+            submitted_markers = (
+                "complaint submitted", "complaint raised", "request submitted", "ticket created",
+                "case created", "case id", "ticket number", "successfully submitted",
+            )
+            if not any(marker in observed for marker in submitted_markers):
+                return False, "I clicked the complaint submission control, but the fresh screen doesn't show a submission confirmation. I can't report the complaint as submitted. Please check the page for an error or confirmation."
+
+        return True, ""
+
+    def _ensure_browser_for_support_request(self, command: str) -> bool:
+        if not self._is_customer_support_request(command):
+            return True
+
+        current = SupportContextDetector.detect_context()
+        support_url = actions.resolve_support_url(command)
+
+        if support_url and current.get("is_browser"):
+            # If the user explicitly asked for a known support page, navigate there instead of leaving the browser on an unrelated page.
+            self.update_companion("thinking", "Opening the official customer-care page for this website...")
+            self.signals.reasoning_step.emit("🌐 Navigating to the official support page for this shop")
+            launch_result = actions.open_item(command)
+            if not launch_result.lower().startswith("opened"):
+                message = "I couldn't open the support page, so I haven't taken any support action. Please open the browser and try again."
+                self.task_state["status"] = "blocked"
+                self.update_companion("error", message)
+                self.signals.response_ready.emit(message, message)
+                self._record_assistant_response(message, status="failed")
+                self.audit_logger.log("Support page open request failed", category="LAUNCH_ERROR", risk_level="HIGH_RISK")
+                return False
+            return True
+
+        if current.get("is_browser") or current.get("website") not in (None, "", "General Website"):
+            return True
+
+        if support_url:
+            self.update_companion("thinking", "Opening the official support page for your shop before I inspect it...")
+            self.signals.reasoning_step.emit("🌐 Opening the shop's official customer support page")
+            launch_result = actions.open_item(command)
+        else:
+            self.update_companion("thinking", "Opening your default browser before inspecting the support page...")
+            self.signals.reasoning_step.emit("🌐 No browser is active; opening the default browser for the support request")
+            launch_result = actions.open_item("browser")
+
+        if not launch_result.lower().startswith("opened"):
+            message = "I couldn't open a browser, so I haven't taken any support action. Open a browser and tell me which shop to use."
+            self.task_state["status"] = "blocked"
+            self.update_companion("error", message)
+            self.signals.response_ready.emit(message, message)
+            self._record_assistant_response(message, status="failed")
+            self.audit_logger.log("Default browser launch failed", category="LAUNCH_ERROR", risk_level="HIGH_RISK")
+            return False
+
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            if SupportContextDetector.get_active_window_info().get("is_browser"):
+                self.signals.reasoning_step.emit("✅ Browser is active; observing the support page")
+                return True
+            time.sleep(0.25)
+
+        message = "The browser launch was requested, but I couldn't verify that a browser window became active. I haven't clicked anything. Please open the shop and try again."
+        self.task_state["status"] = "browser_not_ready"
+        self.update_companion("error", message)
+        self.signals.response_ready.emit(message, message)
+        self._record_assistant_response(message, status="failed")
+        self.audit_logger.log("Browser window did not become active after launch", category="LAUNCH_ERROR", risk_level="HIGH_RISK")
+        return False
+
+    @staticmethod
+    def _user_provided_value(value: str, history: List[Dict[str, Any]]) -> bool:
+        value = value.strip()
+        if not value:
+            return False
+        return any(
+            item.get("role") == "user"
+            and re.search(re.escape(value), str(item.get("content", "")), re.IGNORECASE)
+            for item in history
+        )
+
+    @staticmethod
+    def _screen_text(analysis: Dict[str, Any]) -> str:
+        screen = analysis.get("screen_context", {})
+        return " ".join([
+            str(screen.get("current_page", "")),
+            str(screen.get("full_text", "")),
+            " ".join(str(line) for line in screen.get("ocr_lines", [])),
+        ]).casefold()
+
     def handle_user_request(self, command: str):
         """
         Main 10-step Customer Support Executive reasoning & action pipeline:
@@ -145,6 +285,9 @@ class CustomerSupportAgent(QObject):
                 "current_request": command,
                 "status": "observing",
             })
+
+            if not self._ensure_browser_for_support_request(command):
+                return
 
             # ── 1. Listen & Acknowledge ──
             self.update_companion("listening", "Listening to your request...")
@@ -232,11 +375,9 @@ class CustomerSupportAgent(QObject):
                     risk_level="SAFE"
                 )
 
-            # ── 5. Formulate Multimodal Responses ──
+            # ── 5. Plan the action before reporting its outcome ──
             explanation_text = analysis["explanation_text"]
             explanation_voice = analysis["explanation_voice"]
-
-            self.signals.response_ready.emit(explanation_text, explanation_voice)
 
             # ── 6. Safety & Permission Assessment ──
             suggested_action = analysis.get("suggested_action", "highlight")
@@ -246,6 +387,16 @@ class CustomerSupportAgent(QObject):
                 target_label=target_label,
                 details=analysis
             )
+            auto_open_support = (
+                suggested_action == "click"
+                and self._is_open_support_request(command)
+                and target_found
+                and action_payload["requires_confirmation"]
+            )
+            if auto_open_support:
+                action_payload["requires_confirmation"] = False
+                action_payload["confirmation_prompt"] = ""
+                action_payload["user_confirmed"] = True
             self.task_state["last_action"] = {
                 "action": suggested_action,
                 "target": target_label if target_found else "",
@@ -267,6 +418,7 @@ class CustomerSupportAgent(QObject):
                 full_voice = f"{explanation_voice} {confirm_prompt}".strip()
                 full_text = f"{explanation_text}\n\n⚠️ Confirmation: {confirm_prompt}"
 
+                self.signals.response_ready.emit(full_text, full_voice)
                 self.update_companion("waiting", confirm_prompt or "Waiting for your confirmation...")
                 self.signals.reasoning_step.emit(f"🖱️ Waiting for your confirmation to continue ({risk_level})")
                 self.signals.confirmation_required.emit(action_payload)
@@ -276,8 +428,12 @@ class CustomerSupportAgent(QObject):
                     risk_level=risk_level
                 )
                 self.speak(full_voice)
+            elif auto_open_support:
+                self.update_companion("thinking", "Opening the verified Customer Support option...")
+                self.confirm_pending_action(action_payload)
             else:
                 # Safe action: execute immediately
+                self.signals.response_ready.emit(explanation_text, explanation_voice)
                 self.update_companion("speaking", explanation_voice)
                 self.speak(explanation_voice)
                 self.task_state["status"] = (
@@ -291,9 +447,9 @@ class CustomerSupportAgent(QObject):
                     automatic_steps=1 if suggested_action == "scroll" else 0,
                 )
 
-    def confirm_pending_action(self):
+    def confirm_pending_action(self, approved_action: Optional[Dict[str, Any]] = None):
         """User confirmed pending action via voice 'System continue' or UI click."""
-        action = self.safety_manager.pop_pending_action()
+        action = approved_action or self.safety_manager.pop_pending_action()
         if not action:
             self.update_companion("idle", "No action pending.")
             return
@@ -301,7 +457,7 @@ class CustomerSupportAgent(QObject):
         target_label = action.get("target_label", "element")
         action_name = action.get("action_name", "click")
 
-        if action_name == "click" and not self._revalidate_pending_target(action):
+        if action_name in {"click", "fill", "select"} and not self._revalidate_pending_target(action):
             message = "The screen changed or the target is no longer visible, so I did not click. I’m rechecking the current screen."
             clear_highlight()
             self.update_companion("thinking", message)
@@ -313,18 +469,54 @@ class CustomerSupportAgent(QObject):
             return
 
         target_coords = action.get("target_coords")
+        if action_name in {"click", "fill", "select"} and not (
+            isinstance(target_coords, (list, tuple))
+            and len(target_coords) == 2
+            and all(isinstance(value, (int, float)) and value >= 0 for value in target_coords)
+        ):
+            message = f"I couldn't verify a visible target for '{target_label}', so I did not interact with it. Please adjust the page or tell me what you see."
+            self.task_state["status"] = "blocked_unverified_target"
+            self.update_companion("error", message)
+            self.signals.response_ready.emit(message, message)
+            self.speak(message)
+            return
 
         self.update_companion("executing", f"Executing: {target_label}...")
         self.signals.reasoning_step.emit(f"⚡ User Confirmed: Executing {action_name} on '{target_label}'")
 
         time.sleep(0.3)
-        if action_name == "click" and target_coords and target_coords[0] >= 0 and target_coords[1] >= 0:
+        if action_name in {"click", "fill", "select"} and target_coords and target_coords[0] >= 0 and target_coords[1] >= 0:
             x, y = target_coords
             try:
-                pyautogui.click(x, y)
+                if action_name == "fill":
+                    field_value = str(action.get("details", {}).get("field_value", "")).strip()
+                    if not self._user_provided_value(field_value, self.conversation_history):
+                        message = "I won't enter that value because I can't match it to information you provided. Please tell me the exact text to use."
+                        self.task_state["status"] = "awaiting_user"
+                        self.update_companion("waiting", message)
+                        self.signals.response_ready.emit(message, message)
+                        self.speak(message)
+                        return
+                    pyautogui.click(x, y)
+                    pyautogui.hotkey("ctrl", "a")
+                    pyautogui.write(field_value, interval=0.01)
+                elif action_name == "select":
+                    field_value = str(action.get("details", {}).get("field_value", "")).strip()
+                    if not self._user_provided_value(field_value, self.conversation_history):
+                        message = "I won't select an option until you provide the exact value to use."
+                        self.task_state["status"] = "awaiting_user"
+                        self.update_companion("waiting", message)
+                        self.signals.response_ready.emit(message, message)
+                        self.speak(message)
+                        return
+                    pyautogui.click(x, y)
+                    pyautogui.write(field_value, interval=0.01)
+                    pyautogui.press("enter")
+                else:
+                    pyautogui.click(x, y)
                 clear_highlight()
             except Exception as e:
-                message = f"I couldn't click '{target_label}' because the desktop action failed. No completion was recorded."
+                message = f"I couldn't interact with '{target_label}' because the desktop action failed. No completion was recorded."
                 self._update_latest_action_status(target_label, "failed")
                 self.audit_logger.log(
                     f"Click failed ({type(e).__name__})",
@@ -338,14 +530,19 @@ class CustomerSupportAgent(QObject):
 
         # Advance workflow
         self.workflow_step += 1
-        msg = f"Clicked '{target_label}'. Checking the updated screen."
+        if action_name == "fill":
+            msg = f"Entered the information you provided into '{target_label}'. Checking the updated screen."
+        elif action_name == "select":
+            msg = f"Selected '{target_label}'. Checking the updated screen."
+        else:
+            msg = f"Clicked '{target_label}'. Checking the updated screen."
         self.audit_logger.log(f"Executed {action_name} on '{target_label}'", category="EXECUTE", risk_level="SAFE")
-        self.signals.action_executed.emit(action_name, msg)
-
         # Explain what happened
         self.update_companion("thinking", "Checking the updated screen...")
-        self._update_latest_action_status(target_label, "executed")
+        self._update_latest_action_status(target_label, "action_performed_pending_verification")
         self.task_state["last_action"] = {"action": action_name, "target": target_label, "status": "executed"}
+        self.task_state["last_action"]["details"] = dict(action.get("details", {}))
+        self.task_state["last_action"]["verification_pending"] = True
         self.task_state["workflow_steps"].append(dict(self.task_state["last_action"]))
         self.task_state["status"] = "observing"
         self._observe_after_action()
@@ -463,6 +660,31 @@ class CustomerSupportAgent(QObject):
                 self.update_companion("waiting", warning)
                 return
 
+            verified, verification_message = self._verify_observed_action(analysis, context)
+            if not verified:
+                self.task_state["status"] = "action_unverified"
+                self._update_latest_action_status(
+                    self.task_state.get("last_action", {}).get("target", "action"),
+                    "unverified",
+                )
+                self.signals.reasoning_step.emit("⚠️ The fresh screen did not verify the action; no success was recorded")
+                self.signals.response_ready.emit(verification_message, verification_message)
+                self.speak(verification_message)
+                self.update_companion("waiting", verification_message)
+                return
+
+            completed_action = self.task_state.get("last_action") or {}
+            if completed_action.get("status") == "executed":
+                completed_action["verification_pending"] = False
+                completed_action["verified"] = True
+                self._update_latest_action_status(
+                    completed_action.get("target", "action"), "executed"
+                )
+                self.signals.action_executed.emit(
+                    str(completed_action.get("action", "action")),
+                    f"Observed the screen after {completed_action.get('action', 'action')} on '{completed_action.get('target', 'target')}'.",
+                )
+
             target = analysis.get("target_element", {})
             if target.get("found"):
                 highlight_element(
@@ -502,10 +724,15 @@ class CustomerSupportAgent(QObject):
                     self._execute_action_direct(next_action, observe_after=False)
                     self._observe_after_action(automatic_steps + 1)
                 else:
+                    workflow_goal = str(self.task_state.get("goal", "")).casefold()
+                    active_multistep_support = any(term in workflow_goal for term in (
+                        "customer support", "customer care", "customer service", "complaint",
+                        "complain", "order", "return", "refund", "track", "cancel",
+                    ))
                     self.task_state["status"] = (
                         "completed" if analysis.get("workflow_completed") else "awaiting_user"
                     )
-                    if analysis.get("workflow_completed"):
+                    if analysis.get("workflow_completed") and not active_multistep_support:
                         self.active_workflow = None
                     self.update_companion("speaking", voice)
         except Exception as error:
