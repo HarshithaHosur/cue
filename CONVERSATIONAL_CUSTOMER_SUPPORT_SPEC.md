@@ -144,6 +144,179 @@ Active session persists across user replies without requiring repetitive wake wo
 
 ---
 
+## MODULE 8 – SCREEN UNDERSTANDING
+
+The Screen Understanding Engine is the core sensory component of the Technical Support Agent. It observes the user's workspace, detects the active application, interprets UI geometry, and reads dialogs and terminal errors.
+
+---
+
+## MODULE 8.1 – HIGH-PRECISION SCREEN UNDERSTANDING (VERY HIGH PRIORITY)
+
+The Screen Understanding Engine is one of the most important components of this project.
+
+It must be able to capture, interpret and understand the user's current screen with very high accuracy.
+
+Do NOT rely on simple OCR alone.
+
+Instead, combine:
+• **High-resolution screen capture (`mss`)**
+• **OCR (EasyOCR preferred, Tesseract as fallback)**
+• **Gemini 2.5 Flash Vision**
+• **Existing Context Awareness Engine**
+
+to build a complete understanding of the current screen.
+
+### SCREEN CAPTURE REQUIREMENTS
+Use high-resolution screenshots.
+Capture only the ACTIVE WINDOW whenever possible.
+
+If the user requests:
+"Explain this" or "Help me here"
+the AI should automatically determine the correct window and capture it.
+
+Supported windows include:
+• Browser
+• Terminal
+• VS Code
+• PowerShell
+• Command Prompt
+• Windows Settings
+• Installer dialogs
+• Error popups
+• File Explorer
+• PDF viewers
+• Microsoft Office
+• Any desktop application
+
+### SCREEN ANALYSIS PIPELINE
+User Request
+↓
+Capture Active Window (`mss`)
+↓
+Preprocess Screenshot
+↓
+OCR Extraction (EasyOCR / Tesseract)
+↓
+Gemini Vision Analysis
+↓
+Combine OCR + Visual Understanding + Context
+↓
+Identify:
+• Current application
+• Current screen
+• Visible buttons
+• Error messages
+• Menus
+• Dialog boxes
+• Code
+• Terminal output
+• Installation progress
+• Forms
+• Warnings
+• Notifications
+↓
+Generate structured understanding
+↓
+Reasoning Engine
+↓
+Voice + Text Explanation
+
+### VISUAL UNDERSTANDING
+The AI should understand not only text but also the structure of the interface:
+• Which button is primary
+• Which dialog is currently active
+• Which menu is open
+• Which tab is selected
+• Which application has focus
+• Which option should be clicked next
+• Progress bars
+• Warning dialogs
+• Installation windows
+• Permission prompts
+
+The AI should behave as if it is looking at the user's screen just like a human support engineer.
+
+### TERMINAL UNDERSTANDING
+When the active window is a terminal or IDE, the AI should identify:
+• Programming language
+• File currently running
+• Stack traces
+• Exception type
+• Error line number
+• Module names
+• Compiler messages
+• Warnings
+• Build status
+• Suggested fixes
+
+Example:
+User: "System explain this error."
+↓
+Capture terminal
+↓
+Extract visible error
+↓
+Gemini Analysis
+↓
+Explain:
+• What happened
+• Why it happened
+• Which file caused it
+• Which line caused it
+• How to fix it
+• Best practices to avoid it
+
+### CONTEXTUAL UNDERSTANDING
+The AI should never explain screenshots in isolation. Always combine:
+• Previous conversation
+• Current application
+• Current task
+• Current workflow
+• Visible screen
+• User's latest voice request
+
+### SCREEN CHANGE DETECTION
+Intelligently determine when a new screenshot is required:
+• The user changes applications.
+• The user opens a new page.
+• The user requests another action.
+• The AI performs an automated step.
+• The interface changes significantly.
+Avoid sending duplicate screenshots to Gemini unnecessarily.
+
+### VISUAL CONFIDENCE CHECK
+Before taking any automated action, verify that:
+• The correct application is active.
+• The required button is clearly visible.
+• OCR confidence is acceptable.
+• Gemini correctly identified the interface.
+
+If confidence is low:
+Do NOT perform automation.
+Instead say:
+"I'm not completely confident about what I'm seeing. Could you please adjust the window or scroll slightly so I can analyze it again?"
+
+### USER EXPERIENCE
+The user should feel that the AI is genuinely looking at and understanding the screen.
+
+Example:
+User: "System, explain this installation error."
+AI: "I'm analyzing the installer window now..."
+    "I found the error."
+    "The installer cannot continue because Python is already installed on your system."
+    "I recommend repairing the installation instead of reinstalling it."
+    "Would you like me to guide you through the repair process?"
+
+### SCREEN INTELLIGENCE SERVICE (Continuous Background Service)
+Instead of taking screenshots only after voice commands, introduce a **Screen Intelligence Service** that runs alongside your assistant:
+• Detect when the active window changes.
+• Capture screenshots only when the UI changes significantly or the user requests help.
+• Cache the latest screen analysis to avoid sending duplicate screenshots to Gemini.
+• Maintain context across the conversation so the AI doesn't need to re-analyze the same screen repeatedly.
+This reduces latency, lowers API usage, and makes the assistant feel much more responsive and intelligent.
+
+---
+
 ## 5. Master System Prompt for Gemini Multimodal Vision
 
 ```text

@@ -1,5 +1,7 @@
 # ============================================================
 #  SUPPORT MODULE — AI Customer Support Executive
+#  Includes Module 8.1: High-Precision Screen Understanding
+#  and Screen Intelligence Service
 # ============================================================
 
 from intent_platform.core.support.screen_capture import EventDrivenScreenCapture
@@ -13,6 +15,11 @@ from intent_platform.core.support.highlighter import (
 )
 from intent_platform.core.support.audit_logger import SupportAuditLogger, global_audit_logger
 from intent_platform.core.support.page_analyzer import SupportPageAnalyzer
+from intent_platform.core.support.ocr_engine import HighPrecisionOCREngine
+from intent_platform.core.support.screen_intelligence_service import (
+    ScreenIntelligenceService,
+    ScreenIntelligenceSignals
+)
 from intent_platform.core.support.support_agent import (
     CustomerSupportAgent,
     CustomerSupportAgentSignals,
@@ -31,7 +38,12 @@ __all__ = [
     "SupportAuditLogger",
     "global_audit_logger",
     "SupportPageAnalyzer",
+    "HighPrecisionOCREngine",
+    "ScreenIntelligenceService",
+    "ScreenIntelligenceSignals",
     "CustomerSupportAgent",
     "CustomerSupportAgentSignals",
     "get_support_agent",
 ]
+
+

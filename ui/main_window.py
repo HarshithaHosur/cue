@@ -420,6 +420,10 @@ class MainWindow(QMainWindow):
             'highlight', 'fill this form', 'summarize', 'policy',
             'continue', 'confirm', 'proceed', 'yes', 'stop', 'cancel', 'abort', 'no',
             'cold', 'delayed', 'wrong', 'damaged',
+            # Technical Support Executive Voice Triggers
+            'install', 'installer', 'python', 'vscode', 'vs code', 'node', 'git', 'docker',
+            'error', 'traceback', 'syntaxerror', 'modulenotfound', 'terminal',
+            'wifi', 'wi-fi', 'network', 'internet', 'battery', 'charge', 'power saver'
         ]
         if any(kw in cmd_lower for kw in support_triggers):
             # Route to agent dashboard and display there

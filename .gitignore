@@ -19,8 +19,18 @@ build/
 .system_generated/
 scratch/
 
+# Environment Variables & Secrets (CRITICAL: NEVER COMMIT)
+.env
+.env.*
+*.env
+*.key
+*.pem
+credentials.json
+client_secret*.json
+
 # IDE & OS files
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+

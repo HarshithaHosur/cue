@@ -147,13 +147,15 @@ class SupportDashboard(QWidget):
             }}
             QLineEdit:focus {{ border-color: {Theme.ACCENT_GREEN}; }}
         """)
+        search.returnPressed.connect(lambda: self._on_search_submitted(search.text()))
         lay.addWidget(search)
 
         # Example queries
         examples_row = QHBoxLayout()
         examples_row.setSpacing(10)
-        for text in ["My laptop is slow", "Install Python", "Wi-Fi not working", "Help me use Excel"]:
+        for text in ["Install Python", "Explain terminal error", "Wi-Fi not working", "Check battery health"]:
             chip = _SuggestionChip(text)
+            chip.clicked.connect(self._on_suggestion_clicked)
             examples_row.addWidget(chip)
         examples_row.addStretch()
         lay.addLayout(examples_row)
@@ -185,6 +187,19 @@ class SupportDashboard(QWidget):
         p_layout.setContentsMargins(0, 0, 0, 0)
         p_layout.addWidget(scroll)
         return page
+
+    def _on_suggestion_clicked(self, text: str):
+        self._on_nav("sp_agent")
+        self.agent_dashboard.add_user_message(text)
+        from intent_platform.core.support.support_agent import get_support_agent
+        get_support_agent().handle_user_request(text)
+
+    def _on_search_submitted(self, text: str):
+        if text and text.strip():
+            self._on_nav("sp_agent")
+            self.agent_dashboard.add_user_message(text.strip())
+            from intent_platform.core.support.support_agent import get_support_agent
+            get_support_agent().handle_user_request(text.strip())
 
     def _build_device_health(self):
         page = QWidget()
@@ -272,6 +287,8 @@ class _SupportBackButton(QWidget):
 
 
 class _SuggestionChip(QWidget):
+    clicked = Signal(str)
+
     def __init__(self, text, parent=None):
         super().__init__(parent)
         self._text = text
@@ -284,6 +301,9 @@ class _SuggestionChip(QWidget):
         self._hover = True; self.update()
     def leaveEvent(self, e):
         self._hover = False; self.update()
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit(self._text)
 
     def paintEvent(self, e):
         p = QPainter(self)

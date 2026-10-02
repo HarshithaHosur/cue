@@ -18,6 +18,7 @@ from intent_platform.core.support.safety_manager import SafetyManager, ActionRis
 from intent_platform.core.support.highlighter import highlight_element, clear_highlight
 from intent_platform.core.support.audit_logger import global_audit_logger
 from intent_platform.core.support.page_analyzer import SupportPageAnalyzer
+from intent_platform.core.support.screen_intelligence_service import ScreenIntelligenceService
 
 
 class CustomerSupportAgentSignals(QObject):
@@ -34,7 +35,8 @@ class CustomerSupportAgentSignals(QObject):
 class CustomerSupportAgent(QObject):
     """
     Multimodal AI Customer Support Executive.
-    Operates across ANY website without custom hardcoded APIs.
+    Operates across ANY website and desktop application without custom hardcoded APIs.
+    Backed by continuous ScreenIntelligenceService.
     """
 
     def __init__(self, voice_engine=None, companion=None, parent=None):
@@ -44,8 +46,10 @@ class CustomerSupportAgent(QObject):
         self.companion = companion
 
         # Subsystems
-        self.capture_engine = EventDrivenScreenCapture()
         self.page_analyzer = SupportPageAnalyzer()
+        self.screen_intelligence = ScreenIntelligenceService(page_analyzer=self.page_analyzer, parent=self)
+        self.screen_intelligence.start()
+        self.capture_engine = self.screen_intelligence.capture_engine
         self.safety_manager = SafetyManager()
         self.audit_logger = global_audit_logger
 
@@ -118,32 +122,43 @@ class CustomerSupportAgent(QObject):
             self.update_companion("listening", "Listening to your request...")
             time.sleep(0.3)
 
-            # ── 2. Reading Screen & Context Detection ──
-            self.update_companion("thinking", "Reading your screen...")
-            self.signals.reasoning_step.emit("👀 Capturing visible webpage context")
-            img_bytes, w, h = self.capture_engine.capture(reason=f"request: {command}")
+            # ── 2. Screen Understanding via ScreenIntelligenceService ──
+            self.update_companion("thinking", "Analyzing active window & screen structure...")
+            self.signals.reasoning_step.emit("👀 Analyzing active window & screen structure")
 
-            context = SupportContextDetector.detect_context()
-            self.last_detected_website = context["website"]
-            self.last_detected_page_type = context["page_type"]
+            analysis = self.screen_intelligence.get_screen_understanding(
+                command=command,
+                conversation_history=self.conversation_history
+            )
+
+            context = self.screen_intelligence.current_context
+            self.last_detected_website = context.get("website", "General Website")
+            self.last_detected_page_type = context.get("page_type", "Standard Webpage")
             self.signals.context_updated.emit(context)
 
+            if analysis.get("cache_hit"):
+                self.signals.reasoning_step.emit("⚡ Reused cached screen analysis (instant response, zero API overhead)")
+                print(f"[CustomerSupportAgent] [CACHE HIT] Sub-50ms response for '{command}'")
+
             self.audit_logger.log(
-                f"Detected {context['website']} - {context['page_type']} ({context['browser']})",
+                f"Detected {context.get('website')} - {context.get('page_type')} ({context.get('browser')})",
                 category="CONTEXT",
                 risk_level="INFO"
             )
 
-            # ── 3. Vision Understanding & Reasoning ──
-            self.update_companion("thinking", "Understanding the page & planning...")
-            analysis = self.page_analyzer.analyze(
-                command=command,
-                image_bytes=img_bytes,
-                context=context,
-                res_w=w,
-                res_h=h,
-                conversation_history=self.conversation_history
-            )
+            # ── 3. Visual Confidence Check Guard ──
+            if not analysis.get("confidence_verified", True):
+                warning_msg = analysis.get("confidence_warning", self.screen_intelligence.LOW_CONFIDENCE_MESSAGE)
+                self.update_companion("speaking", warning_msg)
+                self.signals.reasoning_step.emit("⚠️ Visual confidence check failed: Safely pausing automation")
+                self.signals.response_ready.emit(warning_msg, warning_msg)
+                self.speak(warning_msg)
+                self.audit_logger.log(
+                    f"Visual Confidence Check Failed: {warning_msg}",
+                    category="SAFETY",
+                    risk_level="HIGH_RISK"
+                )
+                return
 
             # Emit reasoning steps sequentially to Reasoning Panel
             steps = analysis.get("reasoning_steps", [])
@@ -309,5 +324,11 @@ global_support_agent: Optional[CustomerSupportAgent] = None
 def get_support_agent(voice_engine=None, companion=None) -> CustomerSupportAgent:
     global global_support_agent
     if global_support_agent is None:
-        global_support_agent = CustomerSupportAgent(voice_engine=voice_engine, companion=companion)
+        try:
+            from intent_platform.core.techsupport.tech_support_agent import TechnicalSupportAgent
+            global_support_agent = TechnicalSupportAgent(voice_engine=voice_engine, companion=companion)
+        except Exception as e:
+            print(f"[SupportAgent] TechnicalSupportAgent fallback to base: {e}")
+            global_support_agent = CustomerSupportAgent(voice_engine=voice_engine, companion=companion)
     return global_support_agent
+
