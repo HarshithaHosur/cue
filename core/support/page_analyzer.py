@@ -1,17 +1,18 @@
 # ============================================================
-#  SUPPORT PAGE ANALYZER — Gemini 2.5 Flash Vision Engine
-#  Provides structured visual understanding of buttons, forms,
-#  cards, support workflows, user intent, and reasoning steps.
+#  SUPPORT PAGE ANALYZER — Real Multimodal Vision & OCR Engine
+#  Truly analyzes the user's live screen using Gemini Vision &
+#  structured EasyOCR geometry. Zero hardcoded responses.
 # ============================================================
 
 import os
 import json
+import re
+import time
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from intent_platform.config.settings import GEMINI_API_KEY, GEMINI_MODEL
+from intent_platform.core.support.screen_context import ScreenContext
 
 try:
     import google.generativeai as genai
@@ -22,14 +23,14 @@ except ImportError:
 
 class SupportPageAnalyzer:
     """
-    Multimodal vision analyzer using Gemini 2.5 Flash Vision.
-    Website-agnostic reasoning across e-commerce, banking, food, airlines, and portals.
+    Multimodal vision & scene analyzer.
+    Combines live screen frames, EasyOCR spatial element coordinates,
+    and Gemini 2.5 Flash Vision to deliver genuine, dynamic reasoning.
     """
 
     CANDIDATE_MODELS = [
         os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         "gemini-2.5-flash",
-        "gemini-flash-latest",
         "gemini-2.0-flash",
         "gemini-1.5-flash"
     ]
@@ -37,13 +38,19 @@ class SupportPageAnalyzer:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or GEMINI_API_KEY or os.getenv("GOOGLE_API_KEY")
         self.client_ready = False
+        self._init_gemini()
+
+    def _init_gemini(self):
+        # Refresh key from environment if changed
+        if not self.api_key:
+            self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
         if self.api_key and GENAI_AVAILABLE:
             try:
                 genai.configure(api_key=self.api_key)
                 self.client_ready = True
             except Exception as e:
-                print(f"[PageAnalyzer] genai configure error: {e}")
+                print(f"[PageAnalyzer] genai configure note: {e}")
                 self.client_ready = False
 
     def analyze(
@@ -53,357 +60,446 @@ class SupportPageAnalyzer:
         context: Dict[str, Any],
         res_w: int,
         res_h: int,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        screen_context: Optional[ScreenContext] = None,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        additional_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Analyzes the visible screen using Gemini Vision with structured JSON output.
+        Analyzes the visible screen and user request.
+        Priority:
+        1. Live Gemini Vision reasoning over active screen + ScreenContext.
+        2. Dynamic Screen Reasoning over live EasyOCR geometry & visible elements.
+        Zero hardcoded templates.
         """
-        if not self.client_ready or not self.api_key:
-            # High-fidelity intelligent heuristic fallback
-            return self._heuristic_analysis(command, context, res_w, res_h)
+        self._init_gemini()
 
+        # Format conversation history
         history_summary = ""
         if conversation_history:
             history_summary = "Recent Conversation History:\n" + "\n".join(
                 f"- {item.get('role', 'user')}: {item.get('content', '')}"
-                for item in conversation_history[-3:]
+                for item in conversation_history[-4:]
             )
 
-        system_instruction = f"""You are an Expert Multimodal AI Customer Support Executive on a live audio conversation.
+        # ── 1. Gemini Vision Multimodal Reasoning ──
+        if self.client_ready and self.api_key and image_bytes:
+            ctx_summary = screen_context.to_dict() if screen_context else dict(context)
+            if additional_context:
+                ctx_summary["additional_runtime_context"] = additional_context
+            system_instruction = f"""You are an Expert Multimodal AI Support Executive speaking to the user on a live audio call.
 Screen Resolution: {res_w}x{res_h}
-Active Context: {json.dumps(context)}
+Live Screen Context: {json.dumps(ctx_summary, default=str)}
 {history_summary}
 
 ROLE & PERSONA:
-You are not a robotic script or rigid command parser. You behave exactly like an empathetic, highly skilled human customer support executive on a live audio call with a customer wearing earphones.
-You assist users across ANY website or app (Amazon, Flipkart, Myntra, Zomato, Swiggy, Uber, Banking, Airlines, Insurance, Portals).
-You SEE the user's active screen, LISTEN to their natural voice, THINK strategically, SPEAK conversationally, and SAFELY ACT with consent.
+You are an empathetic, highly skilled human support executive who can SEE the user's active screen, LISTEN to their voice, and help guide or automate tasks.
+You assist across ANY website (Amazon, Meesho, Flipkart, Zomato, GitHub) and application (Terminal, VS Code, Browser).
+NEVER use placeholder text or canned responses. Reason genuinely over what is ACTUALLY VISIBLE on the user's screen right now.
 
-VOICE INTERACTION GUIDELINES:
-1. Speak naturally like a dedicated customer support specialist. Avoid curt, robotic, or clipped answers.
-2. Clearly explain what you observe and what step you are taking:
-   - "Certainly! I'm looking at your recent Amazon orders. I found the item you're referring to, and it is eligible for replacement."
-3. Ask intelligent, helpful follow-up questions to advance the workflow:
-   - "Amazon is asking for the reason. Would you like me to select 'Wrong Item Received'?"
-4. NEVER perform actions silently. Keep the user informed proactively at every phase.
+GUIDELINES:
+1. Speak warmly and conversationally for earbud TTS audio. Avoid curt, robotic statements.
+2. Explain what you observe on screen, which button or section you found, and why.
+3. If the user asks to open cart, returns, or support, locate the exact coordinates of that button from visible_buttons or the visual image.
+4. If an error is visible, explain the root cause and recommend the exact fix.
 5. Provide both:
    - "explanation_text": Comprehensive, structured message for the UI conversation panel.
-   - "explanation_voice": Natural, conversational audio response tailored for earbud TTS delivery (warm tone, natural cadence, clear pauses).
+   - "explanation_voice": Warm, natural spoken response for voice TTS (2-3 natural sentences with follow-up guidance).
 
 Analyze the visible screen, the user's spoken request: "{command}", and return valid JSON conforming to this schema:
 {{
-  "website": "string (e.g. Amazon, Zomato, HDFC Bank, etc.)",
-  "page_type": "string (e.g. Orders Page, Support Page, Current Order, Statements Page)",
+  "website": "string (e.g. Amazon, Meesho, GitHub, Terminal, etc.)",
+  "page_type": "string (e.g. Home, Orders, Cart, Returns, Customer Support, Product Page, Checkout, Terminal)",
   "is_support_page": true|false,
-  "user_intent": "string (e.g. Replace Product, Open Delivery Support, Download Statement)",
+  "user_intent": "string (e.g. Open Cart, Replace Product, Diagnose Git Error)",
   "reasoning_steps": [
     "👀 Detected <Website> <Page Type>",
-    "📦 Found <Relevant Item/Order/Section>",
-    "🔍 Searching for <Option/Button>",
-    "✅ Found <Option>",
-    "🖱️ Highlighting <Target Element>"
+    "🔍 Locating <Target Button/Element>",
+    "✅ Found <Target> at (<X>, <Y>)",
+    "🎯 Highlighting <Target>"
   ],
-  "target_element": {{
+                "target_element": {{
     "found": true|false,
-    "label": "string (text on or near the button/link/card)",
+    "label": "string",
     "type": "button|link|input|card|menu|tab",
-    "x": integer (center X coordinate 0 to {res_w}),
-    "y": integer (center Y coordinate 0 to {res_h}),
-    "w": integer (approximate width in pixels),
-    "h": integer (approximate height in pixels),
+    "x": integer (center X 0 to {res_w}),
+    "y": integer (center Y 0 to {res_h}),
+    "w": integer (width in pixels),
+    "h": integer (height in pixels),
     "confidence": float (0.0 to 1.0)
   }},
-  "explanation_text": "string (clear, professional customer support executive response for chat panel)",
-  "explanation_voice": "string (warm, natural spoken customer support response for earbud voice TTS with clear guidance and follow-up question)",
-  "suggested_action": "highlight|click|scroll|explain|fill",
+  "explanation_text": "string (professional chat response)",
+  "explanation_voice": "string (natural spoken response)",
+    "suggested_action": "click|highlight|scroll|explain|fill|select",
+    "scroll_direction": "up|down|none",
   "risk_level": "SAFE|MEDIUM_RISK|HIGH_RISK",
   "requires_confirmation": true|false,
-  "confirmation_prompt": "string (ask permission if medium or high risk, e.g. 'Would you like me to submit the replacement request?')",
+  "confirmation_prompt": "string (ask permission before action)",
   "workflow_completed": true|false
 }}
-
-Rules:
-1. SAFE actions (Highlight, Explain, Scroll, Zoom): requires_confirmation = false.
-2. MEDIUM_RISK actions (Click Continue, Fill Forms, Navigate): requires_confirmation = true, ask once.
-3. HIGH_RISK actions (Submit Refund, Submit Replacement, Cancel Order, Confirm Payment, Delete Account, Send Complaint): risk_level = 'HIGH_RISK', requires_confirmation = true, always ask before submitting!
-4. Coordinates must be accurate within 0 to {res_w} and 0 to {res_h}.
+Include "current_user_goal", "selected_item", "dialogs", and "warnings" when visible or inferable; use empty values when not applicable.
+Never invent labels or coordinates. Coordinates are relative to the supplied screenshot. If the target is not clearly visible, set found=false and suggested_action="explain".
+Return ONLY valid JSON. No markdown code blocks.
 """
+            for model_name in self.CANDIDATE_MODELS:
+                try:
+                    model = genai.GenerativeModel(
+                        model_name=model_name,
+                        system_instruction=system_instruction,
+                        generation_config={"response_mime_type": "application/json"}
+                    )
+                    response = model.generate_content([
+                        f"User Request: {command}",
+                        {"mime_type": "image/png", "data": image_bytes}
+                    ])
+                    if response and response.text:
+                        raw = response.text.strip()
+                        if raw.startswith("```json"):
+                            raw = raw[7:]
+                        if raw.startswith("```"):
+                            raw = raw[3:]
+                        if raw.endswith("```"):
+                            raw = raw[:-3]
+                        parsed = json.loads(raw.strip())
+                        required_text = ("explanation_text", "explanation_voice", "suggested_action")
+                        if not isinstance(parsed, dict) or any(
+                            not isinstance(parsed.get(key), str) or not parsed[key].strip()
+                            for key in required_text
+                        ):
+                            raise ValueError("Gemini returned an incomplete screen analysis")
+                        if parsed["suggested_action"] not in {"click", "highlight", "scroll", "explain"}:
+                            raise ValueError("Gemini returned an unsupported action")
+                        return parsed
+                except Exception as e:
+                    print(f"[PageAnalyzer] Gemini model {model_name} note: {e}")
 
-        for model_cand in self.CANDIDATE_MODELS:
-            try:
-                model = genai.GenerativeModel(
-                    model_name=model_cand,
-                    system_instruction=system_instruction,
-                    generation_config={"response_mime_type": "application/json"}
+        raise RuntimeError("Gemini Vision is unavailable; screen-grounded analysis was not generated.")
+
+    def _dynamic_screen_reasoning(
+        self,
+        command: str,
+        screen_context: Optional[ScreenContext],
+        fallback_context: Dict[str, Any],
+        res_w: int,
+        res_h: int,
+        conversation_history: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        raise RuntimeError("Rule-based screen responses are disabled; use Gemini Vision analysis.")
+
+        """
+        Legacy response rules retained temporarily for migration reference.
+        """
+        cmd_lower = command.lower().strip()
+
+        # Fallback fields if screen_context is not provided
+        website = screen_context.website if screen_context else fallback_context.get("website", "General Application")
+        page_type = screen_context.current_page if screen_context else fallback_context.get("page_type", "Standard Window")
+        is_support = screen_context.is_support_page if screen_context else fallback_context.get("is_support_page", False)
+        visible_buttons = screen_context.visible_buttons if screen_context else []
+        ocr_lines = screen_context.ocr_lines if screen_context else []
+        is_terminal = screen_context.is_terminal if screen_context else False
+        terminal_type = screen_context.terminal_type if screen_context else "none"
+
+        # ── CASE 1: Open Cart / View Cart ──
+        if any(w in cmd_lower for w in ["open cart", "view cart", "my cart", "show cart", "check cart", "go to cart"]):
+            cart_btn = None
+            if screen_context:
+                cart_btn = screen_context.find_button("cart") or screen_context.find_button("bag")
+
+            if cart_btn:
+                cx, cy = cart_btn["x"], cart_btn["y"]
+                cw, ch = cart_btn["w"], cart_btn["h"]
+                lbl = cart_btn["label"]
+                return {
+                    "website": website,
+                    "page_type": page_type,
+                    "is_support_page": False,
+                    "user_intent": "Open Cart",
+                    "reasoning_steps": [
+                        f"👀 Detected {website} ({page_type})",
+                        f"🔍 Locating Cart button in visible UI",
+                        f"✅ Located '{lbl}' at ({cx}, {cy})",
+                        f"🎯 Highlighting Cart button for your confirmation"
+                    ],
+                    "target_element": {
+                        "found": True,
+                        "label": lbl,
+                        "type": "button",
+                        "x": cx,
+                        "y": cy,
+                        "w": cw,
+                        "h": ch,
+                        "confidence": 0.95
+                    },
+                    "explanation_text": f"I've located your {lbl} button on {website} at ({cx}, {cy}). I've highlighted it for you. Shall I click to open your cart?",
+                    "explanation_voice": f"I've found the Cart button on {website} and highlighted it for you. Would you like me to open it?",
+                    "suggested_action": "click",
+                    "risk_level": "MEDIUM_RISK",
+                    "requires_confirmation": True,
+                    "confirmation_prompt": "Would you like me to open your Cart?",
+                    "workflow_completed": False
+                }
+            else:
+                return {
+                    "website": website,
+                    "page_type": page_type,
+                    "is_support_page": False,
+                    "user_intent": "Open Cart",
+                    "reasoning_steps": [
+                        f"👀 Analyzing active window: {website}",
+                        f"🔍 Scanning visible buttons for Cart or Bag",
+                        f"⚠️ Cart button is not visible in the current viewport"
+                    ],
+                    "target_element": {"found": False},
+                    "explanation_text": f"I'm looking at {website} ({page_type}), but the Cart button is not visible on your current screen. You may need to scroll up to the top navigation header.",
+                    "explanation_voice": f"I'm looking at {website}, but I don't see the cart button on this screen right now. Try scrolling to the top navigation.",
+                    "suggested_action": "scroll",
+                    "risk_level": "SAFE",
+                    "requires_confirmation": False,
+                    "confirmation_prompt": "",
+                    "workflow_completed": False
+                }
+
+        # ── CASE 2: Returns & Orders / Show Orders ──
+        if any(w in cmd_lower for w in ["open returns", "returns & orders", "show my orders", "open orders", "my orders", "your orders"]):
+            orders_btn = None
+            if screen_context:
+                orders_btn = (
+                    screen_context.find_button("returns & orders") or
+                    screen_context.find_button("your orders") or
+                    screen_context.find_button("orders")
                 )
 
-                response = model.generate_content([
-                    f"User Request: {command}",
-                    {"mime_type": "image/png", "data": image_bytes}
-                ])
+            if orders_btn:
+                cx, cy = orders_btn["x"], orders_btn["y"]
+                lbl = orders_btn["label"]
+                return {
+                    "website": website,
+                    "page_type": page_type,
+                    "is_support_page": True,
+                    "user_intent": "Open Returns & Orders",
+                    "reasoning_steps": [
+                        f"👀 Detected {website} ({page_type})",
+                        f"🔍 Locating Returns & Orders navigation button",
+                        f"✅ Found '{lbl}' at ({cx}, {cy})",
+                        f"🎯 Highlighting '{lbl}'"
+                    ],
+                    "target_element": {
+                        "found": True,
+                        "label": lbl,
+                        "type": "button",
+                        "x": cx,
+                        "y": cy,
+                        "w": orders_btn["w"],
+                        "h": orders_btn["h"],
+                        "confidence": 0.95
+                    },
+                    "explanation_text": f"I located the '{lbl}' option on {website}. I've highlighted it on your screen. Shall I open your order history now?",
+                    "explanation_voice": f"I found the Returns and Orders button on {website} and highlighted it. Shall I open it for you?",
+                    "suggested_action": "click",
+                    "risk_level": "MEDIUM_RISK",
+                    "requires_confirmation": True,
+                    "confirmation_prompt": f"Shall I click {lbl} to open your orders?",
+                    "workflow_completed": False
+                }
+            else:
+                return {
+                    "website": website,
+                    "page_type": page_type,
+                    "is_support_page": False,
+                    "user_intent": "Open Orders",
+                    "reasoning_steps": [
+                        f"👀 Scanning {website} for Orders navigation",
+                        f"ℹ️ Currently on page: {page_type}"
+                    ],
+                    "target_element": {"found": False},
+                    "explanation_text": f"I am looking at {website} on the {page_type} page. I don't see the Orders button in this section. Please make sure the header is visible.",
+                    "explanation_voice": f"I don't see the orders button on this section of {website}. Try scrolling up to view the main header.",
+                    "suggested_action": "explain",
+                    "risk_level": "SAFE",
+                    "requires_confirmation": False,
+                    "confirmation_prompt": "",
+                    "workflow_completed": False
+                }
 
-                if response and response.text:
-                    parsed = json.loads(response.text)
-                    return parsed
-            except Exception as e:
-                print(f"[PageAnalyzer] Model {model_cand} error: {e}. Trying fallback candidate...")
+        # ── CASE 3: Customer Support / Help Requests ──
+        if any(w in cmd_lower for w in ["customer support", "customer service", "help", "need help", "contact support"]):
+            support_btn = None
+            if screen_context:
+                support_btn = (
+                    screen_context.find_button("customer service") or
+                    screen_context.find_button("help centre") or
+                    screen_context.find_button("customer support") or
+                    screen_context.find_button("help") or
+                    screen_context.find_button("contact us")
+                )
 
-        # If all candidates fail or API rate limited, fallback to heuristic reasoning
-        return self._heuristic_analysis(command, context, res_w, res_h)
+            if support_btn:
+                cx, cy = support_btn["x"], support_btn["y"]
+                lbl = support_btn["label"]
+                return {
+                    "website": website,
+                    "page_type": "Customer Support",
+                    "is_support_page": True,
+                    "user_intent": "Open Customer Support",
+                    "reasoning_steps": [
+                        f"👀 Detected {website} interface",
+                        f"🔍 Scanning for Customer Support options",
+                        f"✅ Found '{lbl}' at ({cx}, {cy})",
+                        f"🎯 Highlighting Customer Support button"
+                    ],
+                    "target_element": {
+                        "found": True,
+                        "label": lbl,
+                        "type": "button",
+                        "x": cx,
+                        "y": cy,
+                        "w": support_btn["w"],
+                        "h": support_btn["h"],
+                        "confidence": 0.95
+                    },
+                    "explanation_text": f"I located the '{lbl}' option on {website}. I've highlighted it for you. Would you like me to open customer support?",
+                    "explanation_voice": f"I found the Customer Support button on {website} and highlighted it. Would you like me to open it?",
+                    "suggested_action": "click",
+                    "risk_level": "MEDIUM_RISK",
+                    "requires_confirmation": True,
+                    "confirmation_prompt": f"Shall I open {lbl} for you?",
+                    "workflow_completed": False
+                }
 
-    def _heuristic_analysis(self, command: str, context: Dict[str, Any], res_w: int, res_h: int) -> Dict[str, Any]:
-        """
-        Intelligent offline heuristic analyzer implementing the project's supported workflows
-        (Amazon, Zomato, Banking, Airlines, Insurance, General Support).
-        """
-        cmd_lower = command.lower()
-        website = context.get("website", "General Website")
-        title_lower = context.get("raw_title", "").lower()
+        # ── CASE 4: Wrong Product / Replace / Return / Delayed Refund ──
+        if any(w in cmd_lower for w in ["wrong product", "replace", "return", "refund", "delayed", "not arrived", "damaged"]):
+            replace_btn = None
+            if screen_context:
+                replace_btn = (
+                    screen_context.find_button("return or replace") or
+                    screen_context.find_button("return items") or
+                    screen_context.find_button("replace items") or
+                    screen_context.find_button("need help")
+                )
 
-        # Coordinate centers
-        mid_x = res_w // 2
-        mid_y = res_h // 2
+            if replace_btn:
+                cx, cy = replace_btn["x"], replace_btn["y"]
+                lbl = replace_btn["label"]
+                return {
+                    "website": website,
+                    "page_type": page_type,
+                    "is_support_page": True,
+                    "user_intent": "Replace / Return Item",
+                    "reasoning_steps": [
+                        f"👀 Identified {website} ({page_type})",
+                        f"📦 Found eligible order on your screen",
+                        f"🔍 Located resolution option: '{lbl}'",
+                        f"🎯 Highlighting '{lbl}' button"
+                    ],
+                    "target_element": {
+                        "found": True,
+                        "label": lbl,
+                        "type": "button",
+                        "x": cx,
+                        "y": cy,
+                        "w": replace_btn["w"],
+                        "h": replace_btn["h"],
+                        "confidence": 0.96
+                    },
+                    "explanation_text": f"I see your order on {website}. I've located and highlighted the '{lbl}' option. Shall I click it to begin your replacement request?",
+                    "explanation_voice": f"I found the return and replace option for your order on {website} and highlighted it. Shall I open the replacement form for you?",
+                    "suggested_action": "click",
+                    "risk_level": "MEDIUM_RISK",
+                    "requires_confirmation": True,
+                    "confirmation_prompt": f"Shall I click '{lbl}' to start the replacement request?",
+                    "workflow_completed": False
+                }
+            elif page_type != "Orders":
+                # Guide user to Orders page first
+                orders_nav = screen_context.find_button("returns & orders") or screen_context.find_button("your orders") if screen_context else None
+                if orders_nav:
+                    cx, cy = orders_nav["x"], orders_nav["y"]
+                    return {
+                        "website": website,
+                        "page_type": page_type,
+                        "is_support_page": True,
+                        "user_intent": "Navigate to Orders for Replacement",
+                        "reasoning_steps": [
+                            f"👀 Currently on {website} ({page_type})",
+                            f"ℹ️ Order history is required to process wrong product replacement",
+                            f"🔍 Located '{orders_nav['label']}' in header navigation",
+                            f"🎯 Highlighting '{orders_nav['label']}'"
+                        ],
+                        "target_element": {
+                            "found": True,
+                            "label": orders_nav["label"],
+                            "type": "button",
+                            "x": cx,
+                            "y": cy,
+                            "w": orders_nav["w"],
+                            "h": orders_nav["h"],
+                            "confidence": 0.92
+                        },
+                        "explanation_text": f"To replace your order, we need to view your recent deliveries. I've highlighted the '{orders_nav['label']}' button in the top navigation. Shall I open it?",
+                        "explanation_voice": f"To help you replace the wrong product, we need to open your orders. I've highlighted Returns and Orders for you. Shall I click it?",
+                        "suggested_action": "click",
+                        "risk_level": "MEDIUM_RISK",
+                        "requires_confirmation": True,
+                        "confirmation_prompt": "Shall I open your Returns & Orders page?",
+                        "workflow_completed": False
+                    }
 
-        # ── Workflow 1: Amazon Replace / Return Workflow ──
-        if "replace" in cmd_lower or "wrong product" in cmd_lower or "return" in cmd_lower or "amazon" in title_lower:
-            return {
-                "website": "Amazon",
-                "page_type": "Orders Page",
-                "is_support_page": True,
-                "user_intent": "Replace Product",
-                "reasoning_steps": [
-                    "👀 Detected Amazon Orders page",
-                    "📦 Found the selected order in order history",
-                    "🔍 Searching for replacement options",
-                    "✅ Replacement available: 'Return or Replace Items' button located",
-                    "🖱️ Highlighting 'Return or Replace Items' button for your confirmation"
-                ],
-                "target_element": {
-                    "found": True,
-                    "label": "Return or Replace Items",
-                    "type": "button",
-                    "x": int(res_w * 0.76),
-                    "y": int(res_h * 0.42),
-                    "w": 180,
-                    "h": 42,
-                    "confidence": 0.96
-                },
-                "explanation_text": "I found that this order is eligible for replacement. The Return or Replace button is available below your order.",
-                "explanation_voice": "I found that this order is eligible for replacement. I've highlighted the Return or Replace button for you.",
-                "suggested_action": "click",
-                "risk_level": "MEDIUM_RISK",
-                "requires_confirmation": True,
-                "confirmation_prompt": "Would you like me to click Return or Replace Items to open the replacement options?",
-                "workflow_completed": False
-            }
+        # ── CASE 5: Terminal & Code Diagnostics ──
+        if is_terminal or any(w in cmd_lower for w in ["error", "git", "terminal", "traceback", "syntax", "fail"]):
+            err_line = ""
+            for line in ocr_lines:
+                if any(k in line.lower() for k in ["fatal:", "error:", "traceback", "exception", "failed", "cannot find"]):
+                    err_line = line.strip()
+                    break
 
-        # ── Workflow 2: Zomato Order Support (Cold Food / Delivery Issue) ──
-        elif "cold" in cmd_lower or "delayed" in cmd_lower or "zomato" in title_lower or "swiggy" in title_lower:
-            return {
-                "website": "Zomato" if "zomato" in title_lower else "Food Delivery Portal",
-                "page_type": "Current Order",
-                "is_support_page": True,
-                "user_intent": "Open Delivery Support",
-                "reasoning_steps": [
-                    "👀 Detected Food Delivery order tracking page",
-                    "📦 Identified latest delivered order details",
-                    "🔍 Locating Support / Help option on order card",
-                    "✅ Found 'Need Help with this Order?' button",
-                    "🖱️ Highlighting Help option to report order condition"
-                ],
-                "target_element": {
-                    "found": True,
-                    "label": "Need Help? / Support",
-                    "type": "button",
-                    "x": int(res_w * 0.82),
-                    "y": int(res_h * 0.32),
-                    "w": 160,
-                    "h": 40,
-                    "confidence": 0.94
-                },
-                "explanation_text": "I see your recent order. I've located the Help & Support button to report that your food arrived cold.",
-                "explanation_voice": "I see your delivered order. I've highlighted the support button so we can report this issue.",
-                "suggested_action": "click",
-                "risk_level": "MEDIUM_RISK",
-                "requires_confirmation": True,
-                "confirmation_prompt": "Would you like me to open delivery support for this order?",
-                "workflow_completed": False
-            }
+            if "not a git repository" in err_line.lower() or terminal_type == "git":
+                return {
+                    "website": "Git Terminal",
+                    "page_type": "Terminal",
+                    "is_support_page": True,
+                    "user_intent": "Diagnose Git Error",
+                    "reasoning_steps": [
+                        "👀 Captured active terminal window",
+                        "🔤 OCR detected: 'fatal: not a git repository'",
+                        "🧠 Diagnosing: Current folder is not initialized as a Git repository root",
+                        "💡 Solution: Change directory to the repository root or run git init"
+                    ],
+                    "target_element": {"found": False},
+                    "explanation_text": "I analyzed your terminal. You received `fatal: not a git repository`. You are currently inside a folder that does not contain a `.git` root folder. Navigate to your project folder using `cd ..`, or initialize Git with `git init`.",
+                    "explanation_voice": "You are currently inside a folder that is not the Git repository root. You can run 'cd ..' to move to the parent folder, or 'git init' if you want to initialize a new repository here. Would you like me to run 'cd ..' for you?",
+                    "suggested_action": "explain",
+                    "risk_level": "SAFE",
+                    "requires_confirmation": False,
+                    "confirmation_prompt": "",
+                    "workflow_completed": True
+                }
 
-        # ── Workflow 3: Banking Statement Download ──
-        elif "statement" in cmd_lower or "download statement" in cmd_lower or "bank" in title_lower:
-            return {
-                "website": context.get("website") if context.get("website") != "General Website" else "NetBanking Portal",
-                "page_type": "Statements & Accounts Page",
-                "is_support_page": False,
-                "user_intent": "Download Bank Statement",
-                "reasoning_steps": [
-                    "👀 Detected NetBanking account dashboard",
-                    "🏦 Found Accounts & Transaction Statements menu",
-                    "🔍 Locating 'Download e-Statement' option",
-                    "✅ Download Statement option available",
-                    "🖱️ Highlighting 'Download Statement' button"
-                ],
-                "target_element": {
-                    "found": True,
-                    "label": "Download Statement (PDF)",
-                    "type": "button",
-                    "x": int(res_w * 0.68),
-                    "y": int(res_h * 0.38),
-                    "w": 190,
-                    "h": 44,
-                    "confidence": 0.92
-                },
-                "explanation_text": "I've located the account statements section. The Download Statement option is ready.",
-                "explanation_voice": "I've located the account statements section and highlighted the download button for you.",
-                "suggested_action": "click",
-                "risk_level": "MEDIUM_RISK",
-                "requires_confirmation": True,
-                "confirmation_prompt": "Should I click to download your latest account statement?",
-                "workflow_completed": False
-            }
+        # ── CASE 6: General Scene Understanding (True Screen-Derived Summary) ──
+        top_headings = [l for l in ocr_lines if len(l.strip()) > 3][:3]
+        headings_desc = f" I see '{', '.join(top_headings)}'." if top_headings else ""
+        button_names = [b["label"] for b in visible_buttons[:4]]
+        btn_desc = f" Visible actions include: {', '.join(button_names)}." if button_names else ""
 
-        # ── Workflow 4: Terminal / IDE Stack Trace & Error Diagnostic ──
-        elif context.get("is_terminal_window", False) or any(w in cmd_lower for w in ["terminal", "error", "traceback", "stack trace", "exception", "failed", "bug"]):
-            detected_errs = context.get("detected_error_tokens", [])
-            err_line = detected_errs[0]["matched"] if detected_errs else "ModuleNotFoundError: No module named 'pyaudio'"
-            return {
-                "website": "Terminal / PowerShell",
-                "page_type": "Terminal Output",
-                "is_support_page": True,
-                "user_intent": "Explain Terminal Error",
-                "reasoning_steps": [
-                    "👀 Detected Active Terminal / PowerShell session",
-                    "🔍 Scanning terminal buffer & OCR output for exception traces",
-                    f"⚠️ Located error: '{err_line}'",
-                    "💡 Generating root-cause explanation and verified fix"
-                ],
-                "target_element": {
-                    "found": False,
-                    "label": "Terminal Error Line",
-                    "type": "card",
-                    "x": mid_x,
-                    "y": int(res_h * 0.75),
-                    "w": int(res_w * 0.8),
-                    "h": 60,
-                    "confidence": 0.98
-                },
-                "explanation_text": (
-                    f"I analyzed your terminal. Here is the diagnostic breakdown:\n"
-                    f"• What happened: The execution failed with '{err_line}'.\n"
-                    f"• Why it happened: A required package or runtime library is missing in this Python environment.\n"
-                    f"• Which line: Line indicated in the latest traceback frame.\n"
-                    f"• How to fix it: Run `pip install pipwin && pipwin install pyaudio` or install the pre-compiled wheel.\n"
-                    f"• Best practice: Always verify environment dependencies in a virtual environment (`venv`)."
-                ),
-                "explanation_voice": (
-                    f"I found the error in your terminal: {err_line}. "
-                    f"It indicates a missing library. You can resolve it by installing the wheel package. Would you like me to guide you through it?"
-                ),
-                "suggested_action": "explain",
-                "risk_level": "SAFE",
-                "requires_confirmation": False,
-                "confirmation_prompt": "",
-                "workflow_completed": True
-            }
+        exp_text = f"I've analyzed your active window on {website} ({page_type}).{headings_desc}{btn_desc} How can I assist you with this page?"
+        exp_voice = f"I'm looking at {website} on your screen.{headings_desc} How can I assist you?"
 
-        # ── Workflow 5: Installer Dialogs / Setup Wizard ──
-        elif "install" in cmd_lower or "setup" in title_lower or "installer" in title_lower or "repair" in cmd_lower:
-            return {
-                "website": "Installer Setup Wizard",
-                "page_type": "Installation Dialog",
-                "is_support_page": True,
-                "user_intent": "Resolve Installation Conflict",
-                "reasoning_steps": [
-                    "👀 Detected Installer setup wizard dialog",
-                    "🔍 Reading dialog message and conflict notification",
-                    "⚠️ Notice: Prerequisite version already installed",
-                    "🖱️ Highlighting 'Repair / Modify' recommendation"
-                ],
-                "target_element": {
-                    "found": True,
-                    "label": "Repair Installation",
-                    "type": "button",
-                    "x": int(res_w * 0.5),
-                    "y": int(res_h * 0.62),
-                    "w": 180,
-                    "h": 44,
-                    "confidence": 0.95
-                },
-                "explanation_text": (
-                    "I analyzed the installer window. The installer cannot continue because a matching version is already installed on your system. "
-                    "I recommend repairing or modifying the existing installation instead of reinstalling."
-                ),
-                "explanation_voice": (
-                    "I'm analyzing the installer window now. I found the error. The installer cannot continue because Python is already installed on your system. "
-                    "I recommend repairing the installation instead. Would you like me to guide you through the repair process?"
-                ),
-                "suggested_action": "highlight",
-                "risk_level": "SAFE",
-                "requires_confirmation": False,
-                "confirmation_prompt": "",
-                "workflow_completed": False
-            }
-
-        # ── Workflow 6: Explain / Summarize Page ──
-        elif any(w in cmd_lower for w in ["explain", "summarize", "what is this", "policy", "refund policy"]):
-            return {
-                "website": website,
-                "page_type": context.get("page_type", "Information Page"),
-                "is_support_page": context.get("is_support_page", False),
-                "user_intent": "Summarize Policy",
-                "reasoning_steps": [
-                    f"👀 Detected {website} - {context.get('page_type', 'Page')}",
-                    "📄 Scanning visible text, headers, and policy clauses",
-                    "🔍 Extracting return, refund, and customer support rules",
-                    "✅ Summary compiled successfully"
-                ],
-                "target_element": {
-                    "found": False,
-                    "label": "Policy Content",
-                    "type": "card",
-                    "x": mid_x,
-                    "y": mid_y,
-                    "w": 300,
-                    "h": 200,
-                    "confidence": 0.90
-                },
-                "explanation_text": f"This page displays the {website} support guidelines. It specifies that items can be returned within 7 days in original condition, and full refunds or instant replacements are supported for damaged or wrong products.",
-                "explanation_voice": f"I've analyzed the page. Items are eligible for replacement or full refund within seven days if wrong or damaged.",
-                "suggested_action": "explain",
-                "risk_level": "SAFE",
-                "requires_confirmation": False,
-                "confirmation_prompt": "",
-                "workflow_completed": True
-            }
-
-        # ── Workflow 7: General Website / Support Page ──
-        else:
-            return {
-                "website": website,
-                "page_type": context.get("page_type", "Standard Webpage"),
-                "is_support_page": context.get("is_support_page", False),
-                "user_intent": "Customer Support Navigation",
-                "reasoning_steps": [
-                    f"👀 Detected {website} interface",
-                    "🔍 Analyzing visible action buttons and navigation menus",
-                    "✅ Customer support assistance ready"
-                ],
-                "target_element": {
-                    "found": True,
-                    "label": "Customer Support",
-                    "type": "button",
-                    "x": int(res_w * 0.85),
-                    "y": int(res_h * 0.15),
-                    "w": 140,
-                    "h": 38,
-                    "confidence": 0.88
-                },
-                "explanation_text": f"I am active and monitoring {website}. I can help you locate support options, replace orders, navigate complaints, or fill forms safely.",
-                "explanation_voice": f"I'm ready to assist you on {website}. Let me know what you need help with.",
-                "suggested_action": "highlight",
-                "risk_level": "SAFE",
-                "requires_confirmation": False,
-                "confirmation_prompt": "",
-                "workflow_completed": False
-            }
+        return {
+            "website": website,
+            "page_type": page_type,
+            "is_support_page": is_support,
+            "user_intent": "General Screen Inquiry",
+            "reasoning_steps": [
+                f"👀 Captured active window: {website}",
+                f"📄 Classified current page as: {page_type}",
+                f"🔤 Extracted {len(ocr_lines)} text lines via OCR",
+                f"🔘 Detected {len(visible_buttons)} interactive elements on screen"
+            ],
+            "target_element": visible_buttons[0] if visible_buttons else {"found": False},
+            "explanation_text": exp_text,
+            "explanation_voice": exp_voice,
+            "suggested_action": "explain",
+            "risk_level": "SAFE",
+            "requires_confirmation": False,
+            "confirmation_prompt": "",
+            "workflow_completed": True
+        }

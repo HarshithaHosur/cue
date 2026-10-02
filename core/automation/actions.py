@@ -320,6 +320,34 @@ def find_document_file(query: str) -> Optional[str]:
     return None
 
 
+def open_amazon() -> str:
+    """
+    Priority 3: Opens official Amazon homepage.
+    If Amazon is already open, focuses existing window/tab and continues using it.
+    Never uses outdated redirect links.
+    """
+    focused = _focus_existing_window("amazon")
+    if focused:
+        return "Amazon is already open. Switched to your existing tab."
+    import webbrowser
+    webbrowser.open("https://www.amazon.in")
+    return "Opened official Amazon homepage."
+
+
+def open_meesho() -> str:
+    """
+    Priority 3: Opens official Meesho homepage.
+    If Meesho is already open, focuses existing window/tab and continues using it.
+    Never uses outdated redirect links.
+    """
+    focused = _focus_existing_window("meesho")
+    if focused:
+        return "Meesho is already open. Switched to your existing tab."
+    import webbrowser
+    webbrowser.open("https://www.meesho.com")
+    return "Opened official Meesho homepage."
+
+
 # ── Omni App & Item Launcher ──
 
 def open_item(name: str) -> str:
@@ -334,6 +362,12 @@ def open_item(name: str) -> str:
     """
     target = name.strip()
     target_lower = target.lower()
+
+    # Priority 3 E-Commerce Homepages (Amazon & Meesho)
+    if target_lower in ['amazon', 'open amazon', 'amazon.in', 'amazon in']:
+        return open_amazon()
+    if target_lower in ['meesho', 'open meesho', 'meesho.com']:
+        return open_meesho()
 
     # Tab handling redirects
     if target_lower in ['new tab', 'open tab', 'open a tab', 'open new tab', 'create tab']:

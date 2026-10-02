@@ -12,6 +12,8 @@
 import time
 import hashlib
 import threading
+import re
+import math
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from PySide6.QtCore import QObject, Signal
 
@@ -19,6 +21,7 @@ from intent_platform.core.support.screen_capture import EventDrivenScreenCapture
 from intent_platform.core.support.context_detector import SupportContextDetector
 from intent_platform.core.support.ocr_engine import HighPrecisionOCREngine
 from intent_platform.core.support.page_analyzer import SupportPageAnalyzer
+from intent_platform.core.support.screen_context import ScreenContext, build_screen_context
 
 
 class ScreenIntelligenceSignals(QObject):
@@ -154,8 +157,9 @@ class ScreenIntelligenceService(QObject):
     def get_screen_understanding(
         self,
         command: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
-        force_refresh: bool = False
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        force_refresh: bool = False,
+        additional_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Primary entry point for the assistant.
@@ -168,22 +172,8 @@ class ScreenIntelligenceService(QObject):
             context = SupportContextDetector.detect_context()
             self.current_context = context
 
-            # 2. Check if cached understanding is still valid
+            # Each request needs fresh reasoning for its command and conversation history.
             cmd_lower = command.lower().strip()
-            is_followup = any(w in cmd_lower for w in [
-                "explain", "what is this", "what happened", "why", "detail", "more", "tell me"
-            ]) and not force_refresh
-
-            if not force_refresh and self.cached_analysis is not None:
-                # Check if UI shifted
-                if not self.capture_engine.has_screen_changed_significantly():
-                    self.cache_hits += 1
-                    self.api_calls_avoided += 1
-                    print(f"[ScreenIntelligence] [CACHE HIT] Reusing screen analysis for '{command}' (Hits: {self.cache_hits})")
-                    # Tailor explanation to the user's specific follow-up query
-                    analysis = dict(self.cached_analysis)
-                    analysis["cache_hit"] = True
-                    return analysis
 
             # 3. Cache miss or forced refresh: Capture Active Window (mss)
             img_bytes, w, h, win_info = self.capture_engine.capture_active_window(
@@ -191,6 +181,15 @@ class ScreenIntelligenceService(QObject):
                 force=True,
                 prefer_active_window=True
             )
+            captured_info = SupportContextDetector.get_window_info(win_info.get("hwnd", 0))
+            if not captured_info.get("title"):
+                captured_info["title"] = win_info.get("title", "")
+                captured_info["title_lower"] = captured_info["title"].lower()
+                captured_info["app_name"] = win_info.get("app_name", context.get("application", "Desktop"))
+                captured_info["browser_name"] = win_info.get("browser_name")
+                captured_info["is_browser"] = captured_info["browser_name"] is not None
+            context = SupportContextDetector.detect_context(captured_info)
+            self.current_context = context
             self.last_img_bytes = img_bytes
             img_hash = hashlib.md5(img_bytes[:4096] + str(len(img_bytes)).encode()).hexdigest()
 
@@ -200,46 +199,101 @@ class ScreenIntelligenceService(QObject):
             ocr_text = ocr_res.get("full_text", "")
             ocr_conf = ocr_res.get("average_confidence", 0.85)
 
-            # 5. Specialized Terminal & IDE Detection
-            is_terminal = (
-                ocr_res.get("is_terminal_like", False) or
-                any(t in win_info.get("title", "").lower() for t in [
-                    "powershell", "cmd", "terminal", "bash", "command prompt", "vs code", "visual studio code"
-                ])
+            # 5. Build Structured ScreenContext (Priority 2: Real Screen Understanding)
+            screen_ctx = build_screen_context(
+                window_info=win_info,
+                ocr_result=ocr_res,
+                width=w,
+                height=h
             )
+            screen_ctx.active_application = captured_info.get("app_name", screen_ctx.active_application)
+            screen_ctx.is_browser = captured_info.get("is_browser", screen_ctx.is_browser)
+            screen_ctx.browser_name = captured_info.get("browser_name", screen_ctx.browser_name)
+            if context.get("website") not in (None, "", "General Website"):
+                screen_ctx.website = context["website"]
+            if context.get("page_type") not in (None, "", "Standard Webpage", "Home"):
+                screen_ctx.current_page = context["page_type"]
+            screen_ctx.is_support_page = context.get("is_support_page", screen_ctx.is_support_page)
+            screen_ctx.current_user_goal = command
+            self.current_screen_context = screen_ctx
 
-            # 6. Analyze with Gemini 2.5 Flash Vision
-            # We enrich the context with OCR extracted text and terminal indicators
+            # 6. Enrich context dict with ScreenContext data for Gemini
             enriched_context = dict(context)
-            enriched_context["is_terminal_window"] = is_terminal
+            enriched_context.update({
+                "application": screen_ctx.active_application,
+                "is_browser": screen_ctx.is_browser,
+                "browser": screen_ctx.browser_name,
+                "website": screen_ctx.website,
+                "page_type": screen_ctx.current_page,
+                "is_support_page": screen_ctx.is_support_page,
+            })
+            enriched_context["is_terminal_window"] = screen_ctx.is_terminal
+            enriched_context["terminal_type"] = screen_ctx.terminal_type
             enriched_context["window_bounds"] = win_info.get("bounds", {})
+            enriched_context["visible_buttons"] = [b["label"] for b in screen_ctx.visible_buttons[:8]]
+            enriched_context["visible_tabs"] = [t["label"] for t in screen_ctx.visible_tabs[:6]]
+            enriched_context["detected_page"] = screen_ctx.current_page
+            enriched_context["detected_website"] = screen_ctx.website
             if ocr_text:
                 enriched_context["ocr_visible_text_snippet"] = ocr_text[:800]
             if ocr_res.get("detected_errors"):
                 enriched_context["detected_error_tokens"] = ocr_res["detected_errors"]
+            if additional_context:
+                enriched_context["additional_runtime_context"] = additional_context
 
+            # 7. Analyze with Gemini Vision + ScreenContext
             analysis = self.page_analyzer.analyze(
                 command=command,
                 image_bytes=img_bytes,
                 context=enriched_context,
                 res_w=w,
                 res_h=h,
-                conversation_history=conversation_history
+                screen_context=screen_ctx,
+                conversation_history=conversation_history,
+                additional_context=additional_context,
             )
 
-            # 7. Merge OCR & Terminal insights into structured response
-            if is_terminal and ("explain" in cmd_lower or "error" in cmd_lower or ocr_res.get("detected_errors")):
+            # 8. Merge OCR & Terminal insights into structured response
+            if screen_ctx.is_terminal and ("explain" in cmd_lower or "error" in cmd_lower or ocr_res.get("detected_errors")):
                 analysis = self._enrich_terminal_analysis(analysis, ocr_res, win_info)
 
-            # 8. Visual Confidence Check
+            # 9. Visual Confidence Check
             analysis["ocr_confidence"] = ocr_conf
+            analysis["current_user_goal"] = command
+            analysis["automation_confidence"] = min(
+                float(analysis.get("target_element", {}).get("confidence", 0.0)),
+                float(ocr_conf),
+            )
+            screen_ctx.automation_confidence = analysis["automation_confidence"]
+            screen_ctx.selected_item = str(analysis.get("selected_item", ""))
+            screen_ctx.dialogs = analysis.get("dialogs", screen_ctx.dialogs)
+            screen_ctx.warnings = analysis.get("warnings", screen_ctx.warnings)
+            target = analysis.get("target_element", {})
+            screen_ctx.highlighted_elements = [target] if target.get("found") else []
+            analysis["screen_context"] = screen_ctx.to_dict()
+
+            origin = win_info.get("capture_origin", win_info.get("bounds", {}))
+            target_x = target.get("x")
+            target_y = target.get("y")
+            if target.get("found") and isinstance(target_x, (int, float)) and isinstance(target_y, (int, float)):
+                target["image_x"] = int(target_x)
+                target["image_y"] = int(target_y)
+                target["ocr_verified"] = self._verify_target_against_ocr(
+                    target, screen_ctx.ocr_blocks
+                )
+                target["x"] = int(target_x + origin.get("left", 0))
+                target["y"] = int(target_y + origin.get("top", 0))
+                target["screen_coordinates"] = True
+            analysis["screen_fingerprint"] = img_hash
+            analysis["window_title"] = win_info.get("title", "")
+            analysis["window_bounds"] = win_info.get("bounds", {})
             confidence_ok, warning_msg = self.verify_visual_confidence(analysis)
             analysis["confidence_verified"] = confidence_ok
             if not confidence_ok:
                 analysis["confidence_warning"] = warning_msg
                 self.signals.confidence_warning.emit(warning_msg)
 
-            # 9. Update Cache
+            # 10. Update Cache
             self.cached_analysis = analysis
             self.cache_key = f"{win_info.get('title', '')}_{img_hash}"
             self.cache_timestamp = time.time()
@@ -260,13 +314,22 @@ class ScreenIntelligenceService(QObject):
         target = analysis.get("target_element", {})
         suggested_action = analysis.get("suggested_action", "explain")
 
-        # Informational and explanation queries don't mutate state, safe by default
+        # Scrolling is non-destructive; clicking/filling requires a verified target.
         if suggested_action in ["explain", "highlight", "scroll"]:
             return True, ""
 
         target_found = target.get("found", False)
         target_conf = target.get("confidence", 0.0)
         ocr_conf = analysis.get("ocr_confidence", 0.85)
+
+        if suggested_action in ["click", "fill", "select"]:
+            if not target_found or not target.get("ocr_verified", False):
+                return False, self.LOW_CONFIDENCE_MESSAGE
+            x = target.get("image_x", -1)
+            y = target.get("image_y", -1)
+            if not (0 <= x < analysis.get("screen_context", {}).get("width", 0)
+                    and 0 <= y < analysis.get("screen_context", {}).get("height", 0)):
+                return False, self.LOW_CONFIDENCE_MESSAGE
 
         # Check thresholds
         if target_found and target_conf < self.confidence_threshold:
@@ -278,6 +341,41 @@ class ScreenIntelligenceService(QObject):
             return False, self.LOW_CONFIDENCE_MESSAGE
 
         return True, ""
+
+    @staticmethod
+    def _verify_target_against_ocr(target: Dict[str, Any], blocks: List[Dict[str, Any]]) -> bool:
+        return ScreenIntelligenceService._find_ocr_target(target, blocks) is not None
+
+    @staticmethod
+    def _find_ocr_target(
+        target: Dict[str, Any], blocks: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        label = re.sub(r"\W+", " ", str(target.get("label", "")).lower()).strip()
+        if not label:
+            return None
+        x = int(target.get("image_x", target.get("x", -1)))
+        y = int(target.get("image_y", target.get("y", -1)))
+        label_tokens = set(label.split())
+        closest = None
+        closest_distance = float("inf")
+        for block in blocks:
+            if float(block.get("confidence", 0.0)) < 0.45:
+                continue
+            text = re.sub(r"\W+", " ", str(block.get("text", "")).lower()).strip()
+            if not text:
+                continue
+            text_tokens = set(text.split())
+            overlap = len(label_tokens & text_tokens) / max(1, len(label_tokens))
+            if overlap < 0.5 and label not in text and text not in label:
+                continue
+            bbox = block.get("bbox", [0, 0, 0, 0])
+            center_x = (bbox[0] + bbox[2]) / 2
+            center_y = (bbox[1] + bbox[3]) / 2
+            distance = math.hypot(center_x - x, center_y - y)
+            if distance <= 120 and distance < closest_distance:
+                closest = block
+                closest_distance = distance
+        return closest
 
     def _enrich_terminal_analysis(
         self,
@@ -303,24 +401,6 @@ class ScreenIntelligenceService(QObject):
             "detected_errors": errors,
             "raw_text_snippet": raw_text[:500]
         }
-
-        # If analysis doesn't already have a rich explanation, build one
-        current_exp = analysis.get("explanation_text", "")
-        if len(current_exp) < 60 or "I am active" in current_exp:
-            err_line = errors[0]["matched"] if errors else "Exception detected in terminal"
-            analysis["explanation_text"] = (
-                f"I analyzed your terminal. Found: {err_line}.\n"
-                f"• What happened: The program halted due to an uncaught exception.\n"
-                f"• Why it happened: A required package or symbol is missing or misconfigured.\n"
-                f"• Recommended fix: Check the import statement or install the missing dependency."
-            )
-            analysis["explanation_voice"] = (
-                f"I see an error in your terminal: {err_line}. "
-                f"It appears a required package is missing. Would you like me to suggest the fix command?"
-            )
-            analysis["suggested_action"] = "explain"
-            analysis["risk_level"] = "SAFE"
-            analysis["requires_confirmation"] = False
 
         return analysis
 

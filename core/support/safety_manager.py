@@ -96,6 +96,10 @@ class SafetyManager:
         risk_level, reason = self.classify_action(action_name, target_label)
         details = details or {}
 
+        if action_name in {"click", "fill", "select"} and target_coords is None:
+            risk_level = ActionRiskLevel.HIGH_RISK
+            reason = "Interactive action has no verified visible target; automation is blocked."
+
         requires_confirmation = (risk_level in [ActionRiskLevel.MEDIUM_RISK, ActionRiskLevel.HIGH_RISK])
 
         confirmation_prompt = ""

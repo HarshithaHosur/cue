@@ -200,7 +200,7 @@ class HighPrecisionOCREngine:
             "full_text": "",
             "lines": [],
             "blocks": [],
-            "average_confidence": 0.85,
+            "average_confidence": 0.0,
             "detected_errors": [],
             "is_terminal_like": False
         }

@@ -8,6 +8,7 @@ import io
 import time
 import sys
 import ctypes
+import os
 from typing import Tuple, Optional, Dict, Any
 from PIL import Image
 
@@ -88,6 +89,7 @@ class EventDrivenScreenCapture:
         pil_img = None
         w, h = 1920, 1080
         active_rect = None
+        capture_origin = {"left": 0, "top": 0}
         window_title = "Desktop"
         window_hwnd = 0
         is_active_window = False
@@ -96,6 +98,23 @@ class EventDrivenScreenCapture:
         if prefer_active_window and WIN32_AVAILABLE and sys.platform == 'win32':
             try:
                 hwnd = win32gui.GetForegroundWindow()
+                if hwnd:
+                    _, foreground_pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if foreground_pid == os.getpid():
+                        candidates = []
+
+                        def collect_external_window(candidate_hwnd, _):
+                            if not win32gui.IsWindowVisible(candidate_hwnd) or win32gui.IsIconic(candidate_hwnd):
+                                return True
+                            _, candidate_pid = win32process.GetWindowThreadProcessId(candidate_hwnd)
+                            title = win32gui.GetWindowText(candidate_hwnd).strip()
+                            if candidate_pid != os.getpid() and title:
+                                candidates.append((candidate_hwnd, title))
+                            return True
+
+                        win32gui.EnumWindows(collect_external_window, None)
+                        if candidates:
+                            hwnd = candidates[0][0]
                 if hwnd and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
                     window_hwnd = hwnd
                     window_title = win32gui.GetWindowText(hwnd).strip()
@@ -105,10 +124,10 @@ class EventDrivenScreenCapture:
                     # Sanity check: valid non-minimized window of reasonable size
                     if rw >= 120 and rh >= 120 and rect[0] >= -500 and rect[1] >= -500:
                         active_rect = {
-                            "left": max(0, rect[0]),
-                            "top": max(0, rect[1]),
+                            "left": rect[0],
+                            "top": rect[1],
                             "width": rw,
-                            "height": rh
+                            "height": rh,
                         }
                         is_active_window = True
             except Exception as e:
@@ -121,13 +140,21 @@ class EventDrivenScreenCapture:
                     primary_monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
 
                     if is_active_window and active_rect:
-                        # Clamp active window inside monitor bounds
+                        left = max(primary_monitor["left"], active_rect["left"])
+                        top = max(primary_monitor["top"], active_rect["top"])
                         target_rect = {
-                            "left": max(primary_monitor["left"], active_rect["left"]),
-                            "top": max(primary_monitor["top"], active_rect["top"]),
-                            "width": min(primary_monitor["width"], active_rect["width"]),
-                            "height": min(primary_monitor["height"], active_rect["height"])
+                            "left": left,
+                            "top": top,
+                            "width": min(
+                                primary_monitor["left"] + primary_monitor["width"] - left,
+                                active_rect["left"] + active_rect["width"] - left,
+                            ),
+                            "height": min(
+                                primary_monitor["top"] + primary_monitor["height"] - top,
+                                active_rect["top"] + active_rect["height"] - top,
+                            ),
                         }
+                        capture_origin = {"left": target_rect["left"], "top": target_rect["top"]}
                         sct_img = sct.grab(target_rect)
                     else:
                         sct_img = sct.grab(primary_monitor)
@@ -143,6 +170,7 @@ class EventDrivenScreenCapture:
             try:
                 from PIL import ImageGrab
                 if is_active_window and active_rect:
+                    capture_origin = {"left": active_rect["left"], "top": active_rect["top"]}
                     bbox = (
                         active_rect["left"],
                         active_rect["top"],
@@ -172,6 +200,7 @@ class EventDrivenScreenCapture:
             "hwnd": window_hwnd,
             "is_active_window": is_active_window,
             "bounds": active_rect or {"left": 0, "top": 0, "width": w, "height": h},
+            "capture_origin": capture_origin,
             "timestamp": now,
             "reason": reason
         }

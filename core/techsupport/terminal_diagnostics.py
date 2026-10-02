@@ -16,8 +16,6 @@ import re
 import json
 import time
 from typing import Dict, Any, Optional, List, Tuple
-from PIL import Image
-
 from intent_platform.config.settings import GEMINI_API_KEY, GEMINI_MODEL
 from intent_platform.core.support.screen_capture import EventDrivenScreenCapture
 from intent_platform.core.support.ocr_engine import HighPrecisionOCREngine
@@ -69,10 +67,10 @@ class TerminalErrorDiagnostics:
         )
 
         # 1. Capture active window
-        cap_result = self.capture_engine.capture_active_window()
-        image_bytes = cap_result.get("image_bytes")
-        window_title = cap_result.get("title", "Terminal")
-        window_rect = cap_result.get("rect", [0, 0, 1920, 1080])
+        image_bytes, _, _, window_info = self.capture_engine.capture_active_window(
+            reason="terminal_diagnostics", force=True, prefer_active_window=True
+        )
+        window_title = window_info.get("title", "Terminal")
 
         # 2. Extract text via OCR
         ocr_result = self.ocr_engine.extract_text(image_bytes)
@@ -84,7 +82,8 @@ class TerminalErrorDiagnostics:
             extracted_text=full_text,
             detected_errors=detected_errors,
             window_title=window_title,
-            command_hint=command_hint
+            command_hint=command_hint,
+            image_bytes=image_bytes,
         )
 
         elapsed = round(time.time() - start_time, 2)
@@ -104,7 +103,8 @@ class TerminalErrorDiagnostics:
         extracted_text: str,
         detected_errors: List[Dict[str, Any]],
         window_title: str,
-        command_hint: str
+        command_hint: str,
+        image_bytes: bytes,
     ) -> Dict[str, Any]:
         """
         Uses Gemini 2.5 Flash to reason over the extracted terminal error.
@@ -112,10 +112,10 @@ class TerminalErrorDiagnostics:
         """
         if self.client_ready and self.api_key and extracted_text.strip():
             try:
-                model = genai.GenerativeModel("gemini-2.5-flash")
+                model = genai.GenerativeModel(GEMINI_MODEL)
                 prompt = f"""You are a Senior IT Technical Support Engineer and Software Diagnostician.
 The user's active window is '{window_title}'.
-The user asked: '{command_hint or "System explain this error."}'
+The user asked: '{command_hint}'
 
 Visible text extracted from the terminal or code window via high-precision OCR:
 \"\"\"
@@ -139,7 +139,10 @@ Please thoroughly analyze this technical issue and return a STRICT JSON object w
 }}
 Do NOT wrap your output in markdown codeblocks. Return valid JSON only.
 """
-                response = model.generate_content(prompt)
+                response = model.generate_content([
+                    prompt,
+                    {"mime_type": "image/png", "data": image_bytes},
+                ])
                 raw_text = response.text.strip()
                 if raw_text.startswith("```json"):
                     raw_text = raw_text[7:]
@@ -149,13 +152,18 @@ Do NOT wrap your output in markdown codeblocks. Return valid JSON only.
                     raw_text = raw_text[:-3]
 
                 parsed = json.loads(raw_text.strip())
+                required = (
+                    "error_type", "cause", "beginner_explanation",
+                    "professional_explanation", "safe_solution", "spoken_response",
+                )
+                if any(not isinstance(parsed.get(key), str) or not parsed[key].strip() for key in required):
+                    raise ValueError("Gemini returned an incomplete terminal diagnosis")
                 return self._format_diagnostic_result(parsed)
 
             except Exception as e:
                 print(f"[TerminalDiagnostics] Gemini analysis fallback: {e}")
 
-        # Intelligent Fallback Diagnostician
-        return self._heuristic_diagnostic(extracted_text, detected_errors, window_title)
+        raise RuntimeError("Gemini Vision could not produce a grounded terminal diagnosis.")
 
     def _heuristic_diagnostic(
         self,

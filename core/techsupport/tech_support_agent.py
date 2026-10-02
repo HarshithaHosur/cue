@@ -64,7 +64,7 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         """
         with self.processing_lock:
             cmd_lower = command.lower().strip()
-            self.conversation_history.append({"role": "user", "content": command})
+            self.conversation_history.append({"role": "user", "content": command, "timestamp": time.time()})
 
             # Check if user is confirming or cancelling an existing pending action
             if self.safety_manager.has_pending_action() or self.active_tech_action:
@@ -75,14 +75,6 @@ class TechnicalSupportAgent(CustomerSupportAgent):
                     self.cancel_pending_action()
                     return
 
-            # Quick handling for direct safe commands
-            if "scroll down" in cmd_lower:
-                self._execute_scroll("down")
-                return
-            elif "scroll up" in cmd_lower:
-                self._execute_scroll("up")
-                return
-
             # ── DOMAIN 1: Software Installation Assistant ──
             if self._is_software_install_request(cmd_lower):
                 self._handle_software_installation(command)
@@ -90,7 +82,7 @@ class TechnicalSupportAgent(CustomerSupportAgent):
 
             # ── DOMAIN 2 & 7: Terminal Error Explanation ──
             if self._is_terminal_error_request(cmd_lower):
-                self._handle_terminal_error(command)
+                self._run_standard_customer_support_pipeline(command)
                 return
 
             # ── DOMAIN 3: WiFi Troubleshooting ──
@@ -160,6 +152,20 @@ class TechnicalSupportAgent(CustomerSupportAgent):
 
         plan = self.software_installer.prepare_installation_plan(sw_info)
 
+        analysis = self._analyze_screen_with_runtime_context(
+            command,
+            {
+                "software": {key: value for key, value in sw_info.items() if key != "official_url"} |
+                    {"official_source": sw_info.get("official_url", "")},
+                "installation_steps": [
+                    value for key, value in plan.items()
+                    if key not in {"explanation_text", "explanation_voice"}
+                ],
+            },
+        )
+        if not analysis:
+            return
+
         self.update_companion("waiting", f"Waiting for confirmation to download {name}...")
         self.signals.reasoning_step.emit(f"📦 Found verified official installer: {sw_info['official_url']}")
         self.signals.reasoning_step.emit(f"🛡️ Permission check: Awaiting your confirmation to proceed")
@@ -178,7 +184,7 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         }
 
         self.signals.confirmation_required.emit(action_payload)
-        self._respond_and_speak(plan["explanation_text"], plan["explanation_voice"])
+        self._respond_and_speak(analysis["explanation_text"], analysis["explanation_voice"])
 
     # ────────────────────────────────────────────
     #  MODULE 2 & 7: TERMINAL ERROR HANDLER
@@ -229,15 +235,10 @@ class TechnicalSupportAgent(CustomerSupportAgent):
     #  MODULE 3: WIFI TROUBLESHOOTING HANDLER
     # ────────────────────────────────────────────
     def _handle_wifi_troubleshooting(self, command: str):
-        self.update_companion("thinking", "Analyzing network interfaces...")
-        self.signals.reasoning_step.emit("📶 Probing Wi-Fi adapter and signal strength")
-        time.sleep(0.2)
-        self.signals.reasoning_step.emit("🌐 Checking internet route and DNS servers")
-
         report = self.wifi_troubleshooter.run_diagnostics()
-
-        for issue in report.get("issues", []):
-            self.signals.reasoning_step.emit(f"🔍 {issue}")
+        analysis = self._analyze_screen_with_runtime_context(command, {"wifi_diagnostics": report})
+        if not analysis:
+            return
 
         if report.get("requires_confirmation") and report.get("suggested_action") != "none":
             action_name = report["suggested_action"]
@@ -258,21 +259,16 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         else:
             self.update_companion("completed", "Wi-Fi check complete.")
 
-        self._respond_and_speak(report["explanation_text"], report["explanation_voice"])
+        self._respond_and_speak(analysis["explanation_text"], analysis["explanation_voice"])
 
     # ────────────────────────────────────────────
     #  MODULE 4: BATTERY HEALTH HANDLER
     # ────────────────────────────────────────────
     def _handle_battery_health(self, command: str):
-        self.update_companion("thinking", "Reading power management sensors...")
-        self.signals.reasoning_step.emit("🔋 Inspecting battery cells and charging state")
-        time.sleep(0.2)
-        self.signals.reasoning_step.emit("⚡ Scanning active applications for power draw")
-
         report = self.battery_assistant.analyze_battery()
-
-        for app in report.get("top_apps", [])[:2]:
-            self.signals.reasoning_step.emit(f"📊 Process '{app['name']}': {app['cpu_percent']}% CPU")
+        analysis = self._analyze_screen_with_runtime_context(command, {"battery_diagnostics": report})
+        if not analysis:
+            return
 
         if report.get("requires_confirmation") and report.get("suggested_action") != "none":
             action_name = report["suggested_action"]
@@ -291,7 +287,33 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         else:
             self.update_companion("completed", "Battery check complete.")
 
-        self._respond_and_speak(report["explanation_text"], report["explanation_voice"])
+        self._respond_and_speak(analysis["explanation_text"], analysis["explanation_voice"])
+
+    def _analyze_screen_with_runtime_context(
+        self, command: str, additional_context: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        self.update_companion("thinking", "Analyzing the active screen and current diagnostic data...")
+        try:
+            analysis = self.screen_intelligence.get_screen_understanding(
+                command=command,
+                conversation_history=self.conversation_history,
+                force_refresh=True,
+                additional_context=additional_context,
+            )
+        except Exception as error:
+            message = "I couldn't complete screen-grounded reasoning, so I did not recommend or execute a change."
+            self.audit_logger.log(str(error), category="ANALYSIS_ERROR", risk_level="HIGH_RISK")
+            self.update_companion("error", message)
+            self.signals.reasoning_step.emit(message)
+            self.signals.response_ready.emit(message, message)
+            self.speak(message)
+            self._record_assistant_response(message, status="failed")
+            return None
+
+        self.signals.context_updated.emit(self.screen_intelligence.current_context)
+        for step in analysis.get("reasoning_steps", []):
+            self.signals.reasoning_step.emit(step)
+        return analysis
 
     # ────────────────────────────────────────────
     #  CONFIRM & CANCEL HANDLERS (MODULE 6: PERMISSION)
@@ -457,7 +479,9 @@ class TechnicalSupportAgent(CustomerSupportAgent):
 
     def _respond_and_speak(self, text: str, voice: str):
         """Helper to send synchronized response to UI chat, companion, and audio TTS."""
-        self.conversation_history.append({"role": "assistant", "content": text})
+        action = self.active_tech_action.get("type", "") if self.active_tech_action else ""
+        status = "awaiting_confirmation" if self.active_tech_action else "responded"
+        self._record_assistant_response(text, action, status)
         self.signals.response_ready.emit(text, voice)
         self.speak(voice)
 
@@ -475,10 +499,18 @@ class TechnicalSupportAgent(CustomerSupportAgent):
         self.update_companion("thinking", "Analyzing active window & screen structure...")
         self.signals.reasoning_step.emit("👀 Analyzing active window & screen structure")
 
-        analysis = self.screen_intelligence.get_screen_understanding(
-            command=command,
-            conversation_history=self.conversation_history
-        )
+        try:
+            analysis = self.screen_intelligence.get_screen_understanding(
+                command=command,
+                conversation_history=self.conversation_history
+            )
+        except Exception as error:
+            print(f"[TechnicalSupportAgent] Screen analysis failed: {error}")
+            message = "Screen analysis is unavailable. Check Gemini configuration and network access; no action was taken."
+            self.update_companion("error", message)
+            self.signals.reasoning_step.emit(message)
+            self.audit_logger.log(str(error), category="ANALYSIS_ERROR", risk_level="HIGH_RISK")
+            return
 
         context = self.screen_intelligence.current_context
         self.last_detected_website = context.get("website", "General Application")
@@ -524,10 +556,9 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             highlight_element(target_x, target_y, target_w, target_h, target_label)
 
         # 5. Formulate Multimodal Responses
-        explanation_text = analysis.get("explanation_text", "I've analyzed the page.")
-        explanation_voice = analysis.get("explanation_voice", explanation_text)
+        explanation_text = analysis["explanation_text"]
+        explanation_voice = analysis["explanation_voice"]
 
-        self.conversation_history.append({"role": "assistant", "content": explanation_text})
         self.signals.response_ready.emit(explanation_text, explanation_voice)
 
         # 6. Safety & Permission Assessment
@@ -537,6 +568,11 @@ class TechnicalSupportAgent(CustomerSupportAgent):
             target_coords=(target_x, target_y) if target_found else None,
             target_label=target_label,
             details=analysis
+        )
+        self._record_assistant_response(
+            explanation_text,
+            suggested_action,
+            "awaiting_confirmation" if action_payload["requires_confirmation"] else "responded",
         )
 
         requires_confirm = action_payload["requires_confirmation"]

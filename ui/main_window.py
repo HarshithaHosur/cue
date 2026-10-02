@@ -416,6 +416,7 @@ class MainWindow(QMainWindow):
         support_triggers = [
             'help me', 'replace', 'return', 'refund', 'explain this', 'explain page',
             'customer support', 'support', 'order', 'complaint', 'contact',
+            'amazon', 'meesho', 'cart', 'returns', 'help',
             'download statement', 'statement', 'scroll down', 'scroll up',
             'highlight', 'fill this form', 'summarize', 'policy',
             'continue', 'confirm', 'proceed', 'yes', 'stop', 'cancel', 'abort', 'no',
@@ -446,6 +447,7 @@ class MainWindow(QMainWindow):
         """Wires the AI Customer Support Agent signals to the Agent Dashboard UI."""
         agent = self.support_agent
         agent_dash = self.page_support.agent_dashboard
+        agent_dash.load_history(agent.conversation_store.recent_turns())
 
         # Reasoning steps -> Reasoning Panel
         agent.signals.reasoning_step.connect(agent_dash.add_reasoning_step)

@@ -102,18 +102,19 @@ class SupportContextDetector:
 
     PAGE_TYPE_RULES = [
         # (Keywords in title/url, Page Type)
-        (['order', 'your orders', 'order history', 'orders'], 'Orders Page'),
-        (['track', 'tracking', 'order status', 'delivery status'], 'Current Order Tracking'),
-        (['return', 'replace', 'replacement', 'exchange'], 'Returns & Replacement'),
-        (['refund', 'refund status'], 'Refunds & Reimbursements'),
+        (['cart', 'basket', 'bag', 'shopping cart'], 'Cart'),
+        (['return', 'replace', 'replacement', 'exchange'], 'Returns'),
+        (['your orders', 'returns & orders', 'order history', 'orders', 'order'], 'Orders'),
+        (['refund', 'refund status'], 'Refunds'),
+        (['customer service', 'help center', 'customer support', 'contact us', 'support', 'faq', 'help'], 'Customer Support'),
+        (['checkout', 'payment', 'billing', 'place order'], 'Checkout'),
+        (['buy now', 'add to cart', 'product details', 'specifications'], 'Product Page'),
         (['statement', 'e-statement', 'transaction', 'passbook', 'account balance'], 'Statements Page'),
         (['claim', 'file claim', 'claim status', 'insurance claim'], 'Claim Form'),
-        (['cart', 'basket', 'bag'], 'Cart Page'),
-        (['checkout', 'payment', 'billing'], 'Checkout Page'),
         (['flight', 'boarding pass', 'web check-in', 'seat selection'], 'Flight Management'),
-        (['help center', 'customer support', 'contact us', 'support', 'faq'], 'Support & Help Desk'),
         (['login', 'sign in', 'authenticate'], 'Authentication Page'),
-        (['profile', 'account settings', 'security'], 'Account Settings')
+        (['profile', 'account settings', 'security'], 'Account Settings'),
+        (['amazon.in', 'amazon.com', 'meesho', 'online shopping', 'shop online', 'home'], 'Home')
     ]
 
     @classmethod
@@ -161,12 +162,38 @@ class SupportContextDetector:
         }
 
     @classmethod
-    def detect_context(cls) -> Dict[str, Any]:
+    def get_window_info(cls, hwnd: int) -> Dict[str, Any]:
+        """Inspects a specific captured window rather than the assistant's foreground window."""
+        title = ""
+        app_name = "Desktop"
+        browser_name = None
+        if WIN32_AVAILABLE and sys.platform == "win32" and hwnd:
+            try:
+                title = win32gui.GetWindowText(hwnd).strip()
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if pid and PSUTIL_AVAILABLE:
+                    process_name = psutil.Process(pid).name()
+                    app_name = process_name
+                    browser_name = cls.KNOWN_BROWSERS.get(process_name.lower())
+                    if browser_name:
+                        app_name = browser_name
+            except Exception:
+                pass
+        return {
+            "title": title,
+            "title_lower": title.lower(),
+            "app_name": app_name,
+            "browser_name": browser_name,
+            "is_browser": browser_name is not None,
+        }
+
+    @classmethod
+    def detect_context(cls, window_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Determines current Application, Browser, Website, Page Type,
         and whether it qualifies as a Customer Support page.
         """
-        info = cls.get_active_window_info()
+        info = window_info or cls.get_active_window_info()
         title_lower = info["title_lower"]
 
         # 1. Determine Website

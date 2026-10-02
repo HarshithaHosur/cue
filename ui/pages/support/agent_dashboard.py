@@ -380,7 +380,8 @@ class AgentDashboard(QWidget):
     @Slot(str, str)
     def add_response(self, text_response: str, voice_response: str):
         """Adds AI assistant response as a chat bubble."""
-        self._add_chat_bubble(text_response, is_user=False)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._add_chat_bubble(f"{stamp}  Assistant\n{text_response}", is_user=False)
 
     @Slot(dict)
     def show_confirmation(self, action_payload: dict):
@@ -400,7 +401,8 @@ class AgentDashboard(QWidget):
     def on_action_executed(self, action_name: str, result_msg: str):
         """Called when a confirmed or safe action completes."""
         self.hide_confirmation()
-        self._add_chat_bubble(f"✅ {result_msg}", is_user=False)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._add_chat_bubble(f"{stamp}  Action: {action_name}\nStatus: executed\n{result_msg}", is_user=False)
 
     @Slot(dict)
     def update_context(self, context: dict):
@@ -456,7 +458,19 @@ class AgentDashboard(QWidget):
 
     def add_user_message(self, text: str):
         """Adds user message to the chat panel."""
-        self._add_chat_bubble(text, is_user=True)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._add_chat_bubble(f"{stamp}  You\n{text}", is_user=True)
+
+    def load_history(self, turns):
+        """Restores recent persisted conversation turns into the existing chat panel."""
+        for turn in turns:
+            stamp = datetime.fromtimestamp(turn["timestamp"]).strftime("%Y-%m-%d %H:%M")
+            self._add_chat_bubble(f"{stamp}  You\n{turn['user_message']}", is_user=True)
+            response = f"{stamp}  Assistant\n{turn['assistant_response']}"
+            if turn.get("action_taken"):
+                response += f"\nAction: {turn['action_taken']}"
+            response += f"\nStatus: {turn.get('status', 'responded')}"
+            self._add_chat_bubble(response, is_user=False)
 
     # ────────────────────────────────────────────
     #  PRIVATE HELPERS
@@ -506,7 +520,7 @@ class AgentDashboard(QWidget):
         if not text:
             return
         self.chat_input.clear()
-        self._add_chat_bubble(text, is_user=True)
+        self.add_user_message(text)
         self.user_command_submitted.emit(text)
 
     def _on_confirm_action(self):
