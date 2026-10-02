@@ -32,7 +32,7 @@ def execute_gesture(gesture_name: str, context: Optional[str] = None) -> Optiona
 
     try:
         if gesture_name == 'thumbs_up':
-            if is_media or detected_app in ('spotify', 'vlc', 'media'):
+            if is_media or detected_app in ('spotify', 'vlc', 'media', 'youtube'):
                 actions.change_volume('up', 5)
                 label = "Volume Up"
             else:
@@ -41,7 +41,7 @@ def execute_gesture(gesture_name: str, context: Optional[str] = None) -> Optiona
                 label = "Zoom In"
 
         elif gesture_name == 'thumbs_down':
-            if is_media or detected_app in ('spotify', 'vlc', 'media'):
+            if is_media or detected_app in ('spotify', 'vlc', 'media', 'youtube'):
                 actions.change_volume('down', 5)
                 label = "Volume Down"
             else:

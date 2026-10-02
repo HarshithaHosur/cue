@@ -70,7 +70,7 @@ class CursorController:
 
     def release(self):
         """Safety release of all pressed mouse buttons."""
-        if self.is_dragging:
+        if self.is_dragging or self.is_pinching:
             if sys.platform == 'win32':
                 try:
                     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP

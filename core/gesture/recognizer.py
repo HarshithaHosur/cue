@@ -19,6 +19,24 @@ class GestureRecognizer:
         self.last_gesture_time: float = 0.0
         self.last_swipe_time: float = 0.0
 
+    @staticmethod
+    def _distance(first, second) -> float:
+        return math.sqrt(
+            (first.x - second.x) ** 2
+            + (first.y - second.y) ** 2
+            + (getattr(first, "z", 0.0) - getattr(second, "z", 0.0)) ** 2
+        )
+
+    def _is_finger_extended(self, landmarks, tip_idx: int, pip_idx: int, mcp_idx: int) -> bool:
+        wrist = landmarks[0]
+        tip = landmarks[tip_idx]
+        pip = landmarks[pip_idx]
+        mcp = landmarks[mcp_idx]
+        tip_to_wrist = self._distance(tip, wrist)
+        pip_to_wrist = self._distance(pip, wrist)
+        mcp_to_wrist = self._distance(mcp, wrist)
+        return tip_to_wrist > pip_to_wrist * 1.05 and pip_to_wrist > mcp_to_wrist * 0.9
+
     def get_finger_states(self, landmarks) -> List[bool]:
         """Returns boolean state [thumb, index, middle, ring, pinky] where True = extended."""
         tips = [4, 8, 12, 16, 20]
@@ -34,51 +52,22 @@ class GestureRecognizer:
         states.append(d_tip_pinky > d_ip_pinky * 1.05)
 
         # ── Index, Middle, Ring, Pinky States ──
-        # Extended if tip is higher than PIP joint (y is lower) and further from wrist (0)
-        wrist = landmarks[0]
+        # Extension is measured relative to the palm so hand rotation does not matter.
         for i in range(1, 5):
-            tip = landmarks[tips[i]]
-            pip = landmarks[pips[i]]
-            mcp = landmarks[mcps[i]]
-
-            # Normal vertical check
-            is_higher = tip.y < pip.y
-            # Distance from wrist check
-            d_tip_wrist = math.hypot(tip.x - wrist.x, tip.y - wrist.y)
-            d_pip_wrist = math.hypot(pip.x - wrist.x, pip.y - wrist.y)
-            d_mcp_wrist = math.hypot(mcp.x - wrist.x, mcp.y - wrist.y)
-
-            is_extended = is_higher and (d_tip_wrist > d_pip_wrist > d_mcp_wrist * 0.9)
-            states.append(is_extended)
+            states.append(self._is_finger_extended(landmarks, tips[i], pips[i], mcps[i]))
 
         return states
 
     def is_index_pointing(self, landmarks) -> bool:
         """Determines if the index finger is extended exclusively for cursor mode."""
-        wrist = landmarks[0]
-        thumb_tip = landmarks[4]
-        thumb_mcp = landmarks[2]
-        index_tip = landmarks[8]
-        index_pip = landmarks[6]
-        index_mcp = landmarks[5]
-
-        # Index MUST be clearly extended
-        d_tip_wrist = math.hypot(index_tip.x - wrist.x, index_tip.y - wrist.y)
-        d_pip_wrist = math.hypot(index_pip.x - wrist.x, index_pip.y - wrist.y)
-        index_up = (index_tip.y < index_pip.y) and (d_tip_wrist > d_pip_wrist * 1.05)
-        if not index_up:
+        # Index must be extended relative to the palm, regardless of hand rotation.
+        if not self._is_finger_extended(landmarks, 8, 6, 5):
             return False
 
         # Middle, Ring, Pinky MUST be curled closed
-        for tip_idx, pip_idx in [(12, 10), (16, 14), (20, 18)]:
-            tip = landmarks[tip_idx]
-            pip = landmarks[pip_idx]
-            if tip.y < pip.y and math.hypot(tip.x - wrist.x, tip.y - wrist.y) > math.hypot(pip.x - wrist.x, pip.y - wrist.y):
+        for tip_idx, pip_idx, mcp_idx in [(12, 10, 9), (16, 14, 13), (20, 18, 17)]:
+            if self._is_finger_extended(landmarks, tip_idx, pip_idx, mcp_idx):
                 return False
-
-        # Thumb must NOT be pointing straight up (which would be thumbs up)
-        if thumb_tip.y < thumb_mcp.y and math.hypot(thumb_tip.x - wrist.x, thumb_tip.y - wrist.y) > math.hypot(thumb_mcp.x - wrist.x, thumb_mcp.y - wrist.y) * 1.3:
-            return False
 
         return True
 
@@ -86,6 +75,10 @@ class GestureRecognizer:
         """Identifies static hand postures."""
         if not landmarks or len(landmarks) < 21:
             return None
+
+        # Give the exclusive index posture precedence over thumb direction.
+        if self.is_index_pointing(landmarks):
+            return 'index_cursor'
 
         fingers = self.get_finger_states(landmarks)
         thumb_ext = fingers[0]
@@ -119,10 +112,6 @@ class GestureRecognizer:
         # 3. PEACE: Index and Middle open, Ring and Pinky firmly closed
         if index_ext and middle_ext and not ring_ext and not pinky_ext:
             return 'peace'
-
-        # 4. INDEX CURSOR: Only index extended (thumb can be near for pinch)
-        if self.is_index_pointing(landmarks):
-            return 'index_cursor'
 
         # 5. FIST Fallback Check
         if not index_ext and not middle_ext and not ring_ext and not pinky_ext:
