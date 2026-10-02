@@ -3,6 +3,8 @@ import { Activity, ArrowRight, AudioLines, Bot, Check, ChevronDown, CircleHelp, 
 
 type Status = {
   status: string;
+  authenticated: boolean;
+  public_demo: boolean;
   web_login_configured: boolean;
   gemini_configured: boolean;
   capabilities: string[];
@@ -39,7 +41,8 @@ export default function App() {
     api('/api/status')
       .then((health: Status & { authenticated: boolean }) => {
         setStatus(health);
-        setAuthenticated(health.authenticated);
+        setAuthenticated(health.authenticated || health.public_demo);
+        if (health.public_demo) setUsername('Public demo');
       })
       .catch(() => setError('The Intent OS API is not reachable. Start the backend and refresh this page.'));
   }, []);
@@ -84,6 +87,10 @@ export default function App() {
     setAuthenticated(false);
     setPassword('');
     setChat([]);
+  }
+
+  if (!status) {
+    return <main className="signin-shell"><section className="signin-panel startup-state"><header className="brand-lockup"><div className="brand-mark"><Command size={19} /></div><span>INTENT <b>OS</b></span></header><div className="signin-content"><span className="eyebrow"><span className="live-dot" /> WEB WORKSPACE</span><h1>{error ? 'Workspace unavailable.' : 'Preparing your workspace.'}</h1><p className="signin-copy">{error || 'Connecting securely to Intent OS…'}</p></div></section></main>;
   }
 
   if (!authenticated) {
@@ -141,7 +148,7 @@ export default function App() {
         </nav>
         <div className="sidebar-spacer" />
         <section className="desktop-link"><div className="desktop-link-icon"><Monitor size={17} /></div><div><strong>Desktop Agent</strong><span>Local hardware control</span></div><span className="local-tag">LOCAL</span><p>Camera, gestures, voice and desktop automation run on your own machine.</p></section>
-        <button className="profile-row" onClick={signOut}><div className="avatar">{username.slice(0, 1).toUpperCase()}</div><span className="profile-text"><strong>{username}</strong><small>Web session</small></span><LogOut size={16} /></button>
+        {status.public_demo ? <div className="profile-row public-profile"><div className="avatar">J</div><span className="profile-text"><strong>Judge demo</strong><small>Public session</small></span></div> : <button className="profile-row" onClick={signOut}><div className="avatar">{username.slice(0, 1).toUpperCase()}</div><span className="profile-text"><strong>{username}</strong><small>Web session</small></span><LogOut size={16} /></button>}
       </aside>
 
       <section className="main-area">
@@ -151,7 +158,7 @@ export default function App() {
             <div className="page-heading"><div><span className="eyebrow">INTENT OS · WEB AGENT</span><h1>Agent workspace</h1><p>Reasoning and conversation, with device boundaries made explicit.</p></div><div className="agent-status"><span className="status-dot" /><div><strong>Ready</strong><small>Text agent · Cloud</small></div><ChevronDown size={15} /></div></div>
             <div className="agent-grid">
               <section className="conversation-panel">
-                <header className="panel-header"><div className="panel-title-icon"><MessageSquareText size={17} /></div><div><strong>Conversation</strong><small>Private to this browser session</small></div><span className="panel-live"><span className="status-dot" /> LIVE</span></header>
+                <header className="panel-header"><div className="panel-title-icon"><MessageSquareText size={17} /></div><div><strong>Conversation</strong><small>{status.public_demo ? 'Public demo conversation' : 'Private to this browser session'}</small></div><span className="panel-live"><span className="status-dot" /> LIVE</span></header>
                 <div className="conversation-log" aria-live="polite">
                   {chat.length === 0 && <div className="empty-state"><div className="empty-symbol"><Sparkles size={23} /></div><h2>Where should we begin?</h2><p>Ask a question, explore an idea, or work through a web-safe task.</p><div className="suggestion-row"><button onClick={() => setMessage('Help me plan a project')}>Plan a project <ArrowRight size={13} /></button><button onClick={() => setMessage('Explain how Intent OS works')}>Explain Intent OS <ArrowRight size={13} /></button></div></div>}
                   {chat.map((line, index) => <article className={`chat-line ${line.role}`} key={`${index}-${line.role}`}><div className="chat-avatar">{line.role === 'assistant' ? <Bot size={16} /> : username.slice(0, 1).toUpperCase()}</div><div className="chat-body"><span>{line.role === 'assistant' ? 'INTENT OS' : 'YOU'}</span><p>{line.content}</p></div></article>)}

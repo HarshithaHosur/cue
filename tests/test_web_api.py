@@ -18,6 +18,7 @@ class WebApiTests(unittest.TestCase):
             "WEB_DEMO_PASSWORD": "unique-test-password",
             "WEB_SESSION_SECRET": "test-only-session-secret-at-least-32-chars",
             "GEMINI_API_KEY": "test-only-key",
+            "WEB_PUBLIC_DEMO": "false",
         })
         self.env.start()
         self.client = TestClient(app)
@@ -33,6 +34,7 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(body["web_login_configured"])
         self.assertTrue(body["gemini_configured"])
         self.assertFalse(body["authenticated"])
+        self.assertFalse(body["public_demo"])
         self.assertEqual(body["status"], "available")
         self.assertIn("camera and gesture control", body["desktop_only"])
         self.assertNotIn("test-only-key", response.text)
@@ -84,6 +86,47 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()["reply"], "Hello from the web agent.")
         self.assertFalse(response.json()["desktop_action_taken"])
         reply.assert_called_once()
+
+    def test_public_demo_status_chat_and_agent_need_no_login(self):
+        with patch.dict(os.environ, {"WEB_PUBLIC_DEMO": "true"}):
+            status_response = self.client.get("/api/status")
+            self.assertEqual(status_response.status_code, 200)
+            self.assertTrue(status_response.json()["public_demo"])
+            self.assertTrue(status_response.json()["authenticated"])
+
+            with patch("web.backend.main.cloud_agent.reply", return_value="Public demo chat works.") as reply:
+                chat_response = self.client.post("/api/chat", json={"message": "hello"})
+            agent_response = self.client.post("/api/agent", json={"action": "status"})
+            logout_response = self.client.post("/api/logout")
+            status_after_logout = self.client.get("/api/status")
+
+        self.assertEqual(chat_response.status_code, 200)
+        self.assertEqual(chat_response.json()["reply"], "Public demo chat works.")
+        self.assertFalse(chat_response.json()["desktop_action_taken"])
+        self.assertEqual(agent_response.status_code, 200)
+        self.assertFalse(agent_response.json()["desktop_action_taken"])
+        self.assertEqual(logout_response.status_code, 200)
+        self.assertTrue(status_after_logout.json()["authenticated"])
+        self.assertNotIn("test-only-key", status_response.text + chat_response.text + agent_response.text)
+        reply.assert_called_once()
+
+    def test_public_demo_chat_still_sanitizes_gemini_failures(self):
+        with patch.dict(os.environ, {"WEB_PUBLIC_DEMO": "true"}):
+            with patch(
+                "web.backend.main.cloud_agent.reply",
+                side_effect=CloudAgentError("Gemini quota is currently exhausted. Check the API project's plan and limits, then try again."),
+            ):
+                response = self.client.post("/api/chat", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("quota is currently exhausted", response.json()["detail"]["message"])
+        self.assertNotIn("test-only-key", response.text)
+
+    def test_public_demo_requires_exact_true_and_default_auth_remains(self):
+        for setting in ("", "1", "yes", "false"):
+            with patch.dict(os.environ, {"WEB_PUBLIC_DEMO": setting}):
+                response = self.client.post("/api/agent", json={"action": "status"})
+            self.assertEqual(response.status_code, 401, setting)
 
     def test_chat_missing_gemini_key_returns_safe_setup_error(self):
         self.client.post("/api/login", json={"username": "judge", "password": "unique-test-password"})

@@ -2,7 +2,7 @@
 
 The existing PySide6 application remains the full local multimodal desktop agent. The additive browser version lives in `web/frontend` and `web/backend`: React/Vite serves the sign-in and workspace UI, and FastAPI provides session login, status, and text-only Gemini chat. The cloud API does not import the desktop IntentEngine, PySide6 UI, local database, screen capture, OCR, camera, microphone, `pyautogui`, or Windows APIs.
 
-The web login is a configurable demo account, not the desktop biometric/user database. Set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a random `WEB_SESSION_SECRET` of at least 32 characters. Do not reuse a personal password. The web agent supports text conversation only; camera, gestures, microphone, screen understanding, and mouse/keyboard automation remain available only in the local desktop application. The web agent must not be treated as controlling the judge's computer.
+The web login is a configurable demo account, not the desktop biometric/user database. Set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a random `WEB_SESSION_SECRET` of at least 32 characters. Do not reuse a personal password. For a public judge demo, set `WEB_PUBLIC_DEMO=true`; the dashboard opens without sign-in, and the API permits anonymous web-agent requests. This is an intentionally public, shared demo, not private authentication. When the flag is false or absent, the signed-session login remains required. The web agent supports text conversation only; camera, gestures, microphone, screen understanding, and mouse/keyboard automation remain available only in the local desktop application. The web agent must not be treated as controlling the judge's computer.
 
 ## Local Web Development
 
@@ -31,7 +31,7 @@ The desktop application remains launched separately with `python main.py` from t
 ## Vercel Deployment
 
 1. Import the `intent_platform` Git repository into Vercel and keep the project root at the repository root. `vercel.json` builds `web/frontend` and routes `/api/*` to the Python FastAPI function at `api/index.py`.
-2. In Vercel Project Settings -> Environment Variables, set `GEMINI_API_KEY`, `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and `WEB_SESSION_SECRET`. Optionally set `GEMINI_MODEL` (the existing default is used otherwise). Use unique judge-demo credentials and a cryptographically random session secret; do not put real values into Git or source files.
+2. In Vercel Project Settings -> Environment Variables, set `WEB_PUBLIC_DEMO` to `true` for anonymous judge access and set `GEMINI_API_KEY` server-side. Optionally set `GEMINI_MODEL` (the existing default is used otherwise). If public demo mode is disabled, set `WEB_DEMO_USERNAME`, `WEB_DEMO_PASSWORD`, and a cryptographically random `WEB_SESSION_SECRET` instead. Do not put real values into Git or source files.
 3. Enable the Production environment variables, deploy, and use the generated URL such as `https://intent-os-demo.vercel.app` as the single judge-facing entry point. The root route opens at sign-in; after login, users reach the dashboard and text-only agent.
 4. Check `https://<deployment-domain>/api/status` for web API, login configuration, and Gemini configuration state. It reports booleans only and never returns the key.
 

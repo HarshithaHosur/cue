@@ -14,6 +14,10 @@ SESSION_COOKIE = "intent_os_session"
 SESSION_MAX_AGE = 60 * 60 * 12
 
 
+def public_demo_enabled() -> bool:
+    return os.getenv("WEB_PUBLIC_DEMO", "").strip().lower() == "true"
+
+
 def _session_secret() -> Optional[str]:
     secret = os.getenv("WEB_SESSION_SECRET", "")
     return secret if len(secret) >= 32 else None
@@ -94,6 +98,9 @@ def login(username: str, password: str, response: Response) -> str:
 
 
 def require_user(request: Request) -> str:
+    if public_demo_enabled():
+        return "public-demo"
+
     username = _read_session(request.cookies.get(SESSION_COOKIE, ""))
     if not username:
         raise HTTPException(

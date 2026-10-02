@@ -13,7 +13,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from web.backend.auth import _read_session, login, logout, require_user, web_login_configured, SESSION_COOKIE
+from web.backend.auth import (
+    SESSION_COOKIE,
+    _read_session,
+    login,
+    logout,
+    public_demo_enabled,
+    require_user,
+    web_login_configured,
+)
 from web.backend.cloud_agent import CloudAgentError, cloud_agent
 
 logging.basicConfig(level=logging.INFO)
@@ -50,13 +58,15 @@ class AgentRequest(BaseModel):
 
 @app.get("/api/status")
 def get_status(request: Request):
-    authenticated = bool(_read_session(request.cookies.get(SESSION_COOKIE, "")))
+    public_demo = public_demo_enabled()
+    authenticated = public_demo or bool(_read_session(request.cookies.get(SESSION_COOKIE, "")))
     login_ready = web_login_configured()
     ai_ready = cloud_agent.configured
     return {
         "application": "Intent OS",
-        "status": "available" if login_ready and ai_ready else "degraded",
+        "status": "available" if (public_demo or login_ready) and ai_ready else "degraded",
         "authenticated": authenticated,
+        "public_demo": public_demo,
         "web_login_configured": login_ready,
         "gemini_configured": ai_ready,
         "capabilities": ["text chat", "AI reasoning", "web dashboard", "session status"],
@@ -76,7 +86,7 @@ def post_login(payload: LoginRequest, response: Response):
 @app.post("/api/logout")
 def post_logout(response: Response, _username: str = Depends(require_user)):
     logout(response)
-    return {"authenticated": False}
+    return {"authenticated": public_demo_enabled()}
 
 
 @app.post("/api/chat")
