@@ -143,11 +143,38 @@ class VoiceEngine:
             else:
                 self._feature_manager.set_status(Feature.VOICE, FeatureStatus.RUNNING.value)
 
+    def _validate_microphone_runtime(self):
+        """Preflight: fail with a clear message if the microphone backend or device is unavailable."""
+        try:
+            import pyaudio  # noqa: F401
+        except Exception as exc:  # pragma: no cover - exercised via runtime environment checks
+            raise RuntimeError(
+                "Missing required microphone backend: install PyAudio with 'python -m pip install pyaudio'. "
+                "On Windows, if PortAudio is missing, install it first or use 'pipwin install pyaudio'."
+            ) from exc
+
+        try:
+            sr.Microphone()
+        except Exception as exc:  # pragma: no cover - exercised via runtime environment checks
+            raise RuntimeError(
+                f"Microphone device unavailable or blocked by OS permissions: {type(exc).__name__}: {exc}"
+            ) from exc
+
     def start(self):
         """Starts background voice listening loop with duplicate thread guard."""
         with self._thread_lock:
             if self.is_running and self.worker_thread and self.worker_thread.is_alive():
                 logger.info("[VOICE] Worker thread already running (duplicate start prevented).")
+                return
+
+            try:
+                self._validate_microphone_runtime()
+            except Exception as exc:
+                logger.error("[VOICE] Microphone unavailable during startup: %s", exc)
+                self.is_running = False
+                self._feature_manager.set_status(Feature.VOICE, FeatureStatus.UNAVAILABLE.value)
+                if self.on_status_change:
+                    self.on_status_change(f"Mic unavailable: {exc}")
                 return
 
             self.is_running = True

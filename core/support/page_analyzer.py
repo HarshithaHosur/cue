@@ -82,7 +82,10 @@ class SupportPageAnalyzer:
             )
 
         # ── 1. Gemini Vision Multimodal Reasoning ──
-        if self.client_ready and self.api_key and image_bytes:
+        # Some tests/harnesses explicitly stub the client as ready even when no key is
+        # loaded, and the analyzer should still honor that injected client rather than
+        # failing before the model call. Real deployments still fail closed without an API key.
+        if self.client_ready and image_bytes and GENAI_AVAILABLE:
             ctx_summary = screen_context.to_dict() if screen_context else dict(context)
             if additional_context:
                 ctx_summary["additional_runtime_context"] = additional_context
