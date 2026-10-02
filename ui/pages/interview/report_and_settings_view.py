@@ -1,5 +1,6 @@
 # ============================================================
 #  REPORTS & SETTINGS VIEWS — AI Interview Agent
+#  All report data comes from real InterviewController pipelines.
 # ============================================================
 
 import json
@@ -18,10 +19,14 @@ from intent_platform.core.interview.store import interview_store
 
 
 class ReportsView(QWidget):
-    """Report Viewer with PDF and HTML export features."""
+    """Report Viewer with PDF and HTML export features.
+
+    Initially shows empty state. `load_report()` populates with real data.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._report_data = None
         self._build_ui()
 
     def _build_ui(self):
@@ -71,33 +76,20 @@ class ReportsView(QWidget):
         card_layout.setContentsMargins(24, 24, 24, 24)
         card_layout.setSpacing(16)
 
-        # Candidate Details Title
-        self.lbl_title = QLabel("Candidate Evaluation Report — Jane Doe")
+        # Title
+        self.lbl_title = QLabel("No report generated yet")
         self.lbl_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         self.lbl_title.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; border: none; background: transparent;")
         card_layout.addWidget(self.lbl_title)
 
-        # Info summary row
-        self.lbl_meta = QLabel("Role: Senior Backend Engineer | Type: Technical | Date: Today")
+        # Metadata
+        self.lbl_meta = QLabel("Complete an interview to generate a report")
         self.lbl_meta.setFont(QFont("Segoe UI", 11))
         self.lbl_meta.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; border: none; background: transparent;")
         card_layout.addWidget(self.lbl_meta)
 
-        # Sections Container
-        self.report_body = QLabel(
-            "<b>Communication Summary:</b><br>"
-            "• Average Pace: 142 WPM (Optimal)<br>"
-            "• Clarity Estimate: 92%<br>"
-            "• Filler Words Detected: 2<br><br>"
-            "<b>Key Strengths:</b><br>"
-            "• Strong technical domain knowledge in Python and distributed systems.<br>"
-            "• Clear articulation of algorithms and asynchronous execution models.<br><br>"
-            "<b>Observations:</b><br>"
-            "• Integrity Status: Clean (No off-screen gaze or tab switching anomalies).<br><br>"
-            "<b>Final Recommendation (Advisory):</b><br>"
-            "<i>Suggested next step: Proceed to system design round.<br>"
-            "<b>Final decision rests with the interviewer.</b></i>"
-        )
+        # Report body
+        self.report_body = QLabel("Reports will appear here after an interview is completed and the report is generated.")
         self.report_body.setWordWrap(True)
         self.report_body.setFont(QFont("Segoe UI", 11))
         self.report_body.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; border: none; background: transparent; line-height: 1.5;")
@@ -109,37 +101,85 @@ class ReportsView(QWidget):
         scroll.setWidget(content)
         page_layout.addWidget(scroll)
 
+    def load_report(self, report_data: dict, session=None):
+        """Populate the view with REAL report data from InterviewController."""
+        self._report_data = report_data
+
+        cand = report_data.get("candidate_information", {})
+        name = cand.get("name", "Candidate")
+        role = cand.get("role", "N/A")
+        itype = cand.get("interview_type", "N/A")
+
+        self.lbl_title.setText(f"Interview Report — {name}")
+        self.lbl_meta.setText(f"Role: {role} | Type: {itype}")
+
+        # Build body HTML from real data
+        comm = report_data.get("communication_summary", {})
+        strengths = report_data.get("strengths", [])
+        improvements = report_data.get("improvement_areas", [])
+        observations = report_data.get("observations", {})
+        rec = report_data.get("overall_recommendation", {}).get("text", "")
+        duration = report_data.get("interview_duration", {})
+        limitations = report_data.get("limitations", "")
+        final_note = report_data.get("final_note", "")
+
+        # Communication
+        wpm = comm.get("average_wpm_estimate", 0)
+        clarity = comm.get("clarity_estimate", 0)
+        filler_count = comm.get("total_detected_filler_words", 0)
+        comm_note = comm.get("note", "")
+
+        wpm_display = f"{wpm} WPM" if wpm > 0 else "No speech data"
+        clarity_display = f"{clarity}%" if clarity > 0 else "N/A"
+
+        # Strengths and improvements
+        strength_html = "<br>• ".join(strengths) if strengths else "Not enough data to determine strengths."
+        improvement_html = "<br>• ".join(improvements) if improvements else "Not enough data to identify areas for improvement."
+
+        # Observations
+        obs_html = ""
+        if observations:
+            for etype, data in observations.items():
+                count = data.get("count", 0) if isinstance(data, dict) else 0
+                obs_html += f"• {etype}: {count} occurrence{'s' if count != 1 else ''}<br>"
+        else:
+            obs_html = "• No observations recorded.<br>"
+
+        # Duration
+        planned = duration.get("planned_minutes", "N/A")
+        actual = duration.get("actual_minutes", 0)
+
+        body_html = (
+            f"<b>Duration:</b><br>"
+            f"• Planned: {planned} min | Actual: {actual} min<br><br>"
+            f"<b>Communication Summary:</b><br>"
+            f"• Average Pace: {wpm_display}<br>"
+            f"• Clarity Estimate: {clarity_display}<br>"
+            f"• Filler Words Detected: {filler_count}<br>"
+            f"<i>{comm_note}</i><br><br>"
+            f"<b>Key Strengths:</b><br>• {strength_html}<br><br>"
+            f"<b>Areas for Improvement:</b><br>• {improvement_html}<br><br>"
+            f"<b>Observations:</b><br>{obs_html}<br>"
+            f"<b>Recommendation (Advisory):</b><br>{rec}<br><br>"
+            f"<i>{limitations}</i><br><br>"
+            f"<b>{final_note}</b>"
+        )
+        self.report_body.setText(body_html)
+
     def load_latest_report(self):
+        """Load the most recent report from the database."""
         interviews = interview_store.list_interviews()
         if interviews:
             latest = interviews[0]
             rep_data = interview_store.get_report(latest["id"])
             if rep_data and "report" in rep_data:
-                rep = rep_data["report"]
-                cand = rep.get("candidate_information", {})
-                self.lbl_title.setText(f"Candidate Evaluation Report — {cand.get('name', 'Candidate')}")
-                self.lbl_meta.setText(f"Role: {cand.get('role', 'N/A')} | Type: {cand.get('interview_type', 'N/A')}")
-                
-                comm = rep.get("communication_summary", {})
-                strengths = "<br>• ".join(rep.get("strengths", ["Standard performance"]))
-                rec = rep.get("overall_recommendation", {}).get("text", "")
-                
-                body_html = (
-                    f"<b>Communication Summary:</b><br>"
-                    f"• Average Pace: {comm.get('average_wpm_estimate', 140)} WPM<br>"
-                    f"• Clarity Estimate: {comm.get('clarity_estimate', 90)}%<br><br>"
-                    f"<b>Key Strengths:</b><br>• {strengths}<br><br>"
-                    f"<b>Overall Recommendation:</b><br>{rec}<br><br>"
-                    f"<i><b>Final decision rests with the interviewer.</b></i>"
-                )
-                self.report_body.setText(body_html)
+                self.load_report(rep_data["report"])
 
     def _export_pdf(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Report PDF", "interview_report.pdf", "PDF Files (*.pdf)")
         if file_path:
             doc = QTextDocument()
             doc.setHtml(f"<h1>{self.lbl_title.text()}</h1><p>{self.lbl_meta.text()}</p><hr><p>{self.report_body.text()}</p>")
-            # Write plain text/HTML output for export
             with open(file_path.replace(".pdf", ".html"), "w", encoding="utf-8") as f:
                 f.write(doc.toHtml())
             QMessageBox.information(self, "Export Success", f"Report saved successfully to {file_path}")
@@ -274,3 +314,9 @@ class InterviewSettingsView(QWidget):
 
     def _save(self):
         QMessageBox.information(self, "Settings Saved", "Interview settings updated successfully!")
+
+
+# Backward compatibility aliases
+FinalReportView = ReportsView
+SettingsView = InterviewSettingsView
+

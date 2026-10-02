@@ -1,13 +1,18 @@
 # ============================================================
 #  AI INTERVIEW DASHBOARD — Full interview workspace
+#  Uses InterviewController for all business logic.
+#  No hardcoded metrics. Real data pipelines only.
 # ============================================================
 
+import time
+import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QStackedWidget,
     QScrollArea, QFrame, QSizePolicy, QLineEdit, QComboBox,
-    QSpinBox, QTextEdit, QRadioButton, QButtonGroup, QGridLayout
+    QSpinBox, QTextEdit, QRadioButton, QButtonGroup, QGridLayout,
+    QMessageBox, QPushButton
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
     QFont, QColor, QPainter, QPainterPath, QBrush, QPen,
     QLinearGradient
@@ -17,21 +22,24 @@ from intent_platform.ui.widgets.components import (
     GlowButton, SectionHeader, SidebarNavItem, StatusBadge
 )
 from intent_platform.ui.pages.interview.live_widgets import (
-    AudioWaveformWidget, LiveVideoPanel, LiveMetricCard, LiveTranscriptWidget
+    AudioWaveformWidget, LiveVideoPanel, LiveMetricCard,
+    LiveTranscriptWidget, TalkTimeWidget, CoachingSuggestionWidget
 )
 from intent_platform.ui.pages.interview.report_and_settings_view import (
     PreviousInterviewsView, ReportsView, InterviewSettingsView
 )
 from intent_platform.core.interview.store import interview_store
-from intent_platform.core.interview.session import InterviewSession
 from intent_platform.core.interview.models import InterviewSetup, InterviewState
-from intent_platform.core.interview.gesture_router import GestureRouter
-from intent_platform.core.interview.observation_engine import ObservationEngine
-from intent_platform.core.interview.voice_router import VoiceRouter
+from intent_platform.core.interview.controller import InterviewController, PreFlightResult
+
+logger = logging.getLogger(__name__)
 
 
 class InterviewDashboard(QWidget):
-    """Complete AI Interview Agent workspace with sub-navigation."""
+    """Complete AI Interview Agent workspace with sub-navigation.
+
+    All business logic is delegated to InterviewController.
+    """
 
     navigate_back = Signal()
 
@@ -39,7 +47,30 @@ class InterviewDashboard(QWidget):
         super().__init__(parent)
         self.engine = engine
         self.user_profile = user_profile
+
+        # Controller manages the full interview lifecycle
+        self.controller = InterviewController()
+        self._connect_controller()
+
         self._build_ui()
+
+    def _connect_controller(self):
+        """Connect controller signals to UI handlers."""
+        self.controller.state_changed.connect(self._on_state_changed)
+        self.controller.interview_started.connect(self._on_interview_started)
+        self.controller.interview_ended.connect(self._on_interview_ended)
+        self.controller.report_ready.connect(self._on_report_ready)
+        self.controller.error_occurred.connect(self._on_error)
+
+        # Metrics signals
+        m = self.controller.metrics
+        m.talk_time_updated.connect(self._on_talk_time_updated)
+        m.transcript_entry.connect(self._on_transcript_entry)
+        m.observation_fired.connect(self._on_observation)
+        m.question_changed.connect(self._on_question_changed)
+        m.fairness_alert.connect(self._on_fairness_alert)
+        m.coaching_suggestion.connect(self._on_coaching_suggestion)
+        m.paste_probes_generated.connect(self._on_paste_probes)
 
     def _build_ui(self):
         layout = QHBoxLayout(self)
@@ -73,7 +104,7 @@ class InterviewDashboard(QWidget):
         nav_data = [
             ("iv_dashboard", "📊", "Dashboard"),
             ("iv_create", "➕", "Create Interview"),
-            ("iv_live", "🔴", "Live Interviews"),
+            ("iv_live", "🔴", "Live Interview"),
             ("iv_previous", "📋", "Previous"),
             ("iv_reports", "📄", "Reports"),
             ("iv_settings", "⚙", "Settings"),
@@ -99,9 +130,10 @@ class InterviewDashboard(QWidget):
         self._stack.addWidget(self._build_interview_home())      # 0: Dashboard
         self._stack.addWidget(self._build_create_interview())    # 1: Create
         self._stack.addWidget(self._build_live_interview())      # 2: Live
-        self._stack.addWidget(self.previous_page)                # 3: Previous
-        self._stack.addWidget(self.reports_page)                 # 4: Reports
-        self._stack.addWidget(self.settings_page)                # 5: Settings
+        self._stack.addWidget(self._build_preflight_page())      # 3: Pre-flight
+        self._stack.addWidget(self.previous_page)                # 4: Previous
+        self._stack.addWidget(self.reports_page)                 # 5: Reports
+        self._stack.addWidget(self.settings_page)                # 6: Settings
 
         layout.addWidget(self._stack)
 
@@ -111,40 +143,27 @@ class InterviewDashboard(QWidget):
     def _on_nav_click(self, page_id):
         idx_map = {
             "iv_dashboard": 0, "iv_create": 1, "iv_live": 2,
-            "iv_previous": 3, "iv_reports": 4, "iv_settings": 5
+            "iv_previous": 4, "iv_reports": 5, "iv_settings": 6
         }
         idx = idx_map.get(page_id, 0)
         self._stack.setCurrentIndex(idx)
         for item in self._nav_items:
             item.set_active(item._page_id == page_id)
 
+    # ── Start Interview Flow ──
+
     def _on_start_interview(self):
-        """Validate form, save via interview_store, create session, and transition to LIVE."""
-        title = self.input_title.text().strip() or "Standard AI Interview"
-        candidate = self.input_candidate.text().strip() or "Candidate"
-        role = self.input_role.text().strip() or "Software Engineer"
+        """Validate form and show pre-flight checks."""
+        title = self.input_title.text().strip() or "Interview Session"
+        candidate = self.input_candidate.text().strip()
+        role = self.input_role.text().strip()
         duration = self.spin_duration.value()
         difficulty = self.combo_difficulty.currentText()
 
         selected_rb = self.btn_group_type.checkedButton()
         itype = selected_rb.text() if selected_rb else "Technical"
 
-        # 1. Save via interview_store
-        setup_data = {
-            "title": title,
-            "candidate_name": candidate,
-            "candidate_email": f"{candidate.lower().replace(' ', '.')}@example.com",
-            "job_role": role,
-            "interview_type": itype,
-            "duration_minutes": duration,
-            "difficulty": difficulty,
-            "status": "scheduled",
-        }
-        self.interview_id = interview_store.create_interview(setup_data)
-
-        # 2. Create InterviewSession
-        self.session = InterviewSession()
-        setup_obj = InterviewSetup(
+        setup = InterviewSetup(
             title=title,
             candidate_name=candidate,
             job_role=role,
@@ -152,75 +171,176 @@ class InterviewDashboard(QWidget):
             duration_minutes=duration,
             difficulty=difficulty,
         )
-        self.session.initialize(setup_obj)
-        self.session.transition_to(InterviewState.VERIFYING)
 
-        # 3. Transition to LIVE
-        self._enter_live_session()
+        # Validate
+        errors = self.controller.validate_setup(setup)
+        if errors:
+            QMessageBox.warning(self, "Validation Error", "\n".join(errors))
+            return
 
-    def _enter_live_session(self):
-        """Transition session to LIVE, hook engine frame tap, gesture interceptor, voice router, and timeline event listener."""
-        if hasattr(self, 'session') and self.session:
-            self.session.transition_to(InterviewState.LIVE)
-            # Step 4: Show timeline events from session.emit_event in live page
-            self.session.event_logged.connect(self._on_event_logged)
+        # Store setup for after preflight
+        self._pending_setup = setup
 
-        # Step 3: Wire routers & engine hooks
-        self.gesture_router = GestureRouter()
-        self.gesture_router.active = True
-        self.gesture_router.on_next_question = lambda: self._on_nav_question(1)
-        self.gesture_router.on_previous_question = lambda: self._on_nav_question(-1)
+        # Show pre-flight page
+        self._stack.setCurrentIndex(3)
+        self._run_preflight()
 
-        self.voice_router = VoiceRouter()
-        self.voice_router.on_next_question = lambda: self._on_nav_question(1)
-        self.voice_router.on_previous_question = lambda: self._on_nav_question(-1)
+    def _run_preflight(self):
+        """Run pre-flight checks and update the UI."""
+        # Reset check widgets
+        for name, lbl in self._preflight_labels.items():
+            lbl.setText(f"  ⏳ {name}: Checking...")
+            lbl.setStyleSheet(f"color: {Theme.TEXT_MUTED}; font-size: 12px; padding: 4px 8px; background: transparent;")
 
-        self.obs_engine = ObservationEngine()
+        self._preflight_start_btn.setEnabled(False)
+        self._preflight_start_btn.setText("Checking...")
 
-        if self.engine:
-            self.engine.add_frame_tap(self._on_frame_tap)
-            self.engine.gesture_interceptor = self.gesture_router.intercept
-            if hasattr(self.engine, 'voice_engine') and self.engine.voice_engine:
-                self.engine.voice_engine.set_interview_hooks(self.voice_router, self._on_transcript_tap)
-                self.engine.voice_engine.interview_mode = True
+        # Run checks
+        QTimer.singleShot(300, self._execute_preflight)
 
-        self._on_nav_click("iv_live")
+    def _execute_preflight(self):
+        result = self.controller.run_preflight(self.engine)
 
-    def _exit_live_session(self):
-        """Undo all engine hooks and routers on End Interview."""
-        if self.engine:
-            self.engine.remove_frame_tap(self._on_frame_tap)
-            self.engine.gesture_interceptor = None
-            if hasattr(self.engine, 'voice_engine') and self.engine.voice_engine:
-                self.engine.voice_engine.set_interview_hooks(None, None)
-                self.engine.voice_engine.interview_mode = False
+        for check in result.checks:
+            lbl = self._preflight_labels.get(check.name)
+            if lbl:
+                if check.available:
+                    lbl.setText(f"  ✓ {check.name}: {check.message}")
+                    lbl.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; font-size: 12px; padding: 4px 8px; background: transparent;")
+                elif check.degraded:
+                    lbl.setText(f"  ⚠ {check.name}: {check.message}")
+                    lbl.setStyleSheet(f"color: {Theme.ACCENT_ORANGE}; font-size: 12px; padding: 4px 8px; background: transparent;")
+                else:
+                    lbl.setText(f"  ✗ {check.name}: {check.message}")
+                    lbl.setStyleSheet(f"color: {Theme.ACCENT_RED}; font-size: 12px; padding: 4px 8px; background: transparent;")
 
-        if hasattr(self, 'gesture_router') and self.gesture_router:
-            self.gesture_router.active = False
+        if result.can_start:
+            self._preflight_start_btn.setEnabled(True)
+            self._preflight_start_btn.setText("🚀 Start Interview")
+        else:
+            self._preflight_start_btn.setEnabled(False)
+            self._preflight_start_btn.setText("Cannot start — required services unavailable")
 
-        if hasattr(self, 'session') and self.session and self.session.state == InterviewState.LIVE:
-            self.session.transition_to(InterviewState.ENDED)
-            self.session.transition_to(InterviewState.REPORTED)
+    def _on_preflight_start(self):
+        """Pre-flight passed — start the interview."""
+        if hasattr(self, '_pending_setup'):
+            iid = self.controller.start_interview(self._pending_setup, self.engine)
+            if iid:
+                self._on_nav_click("iv_live")
 
-    def _on_frame_tap(self, frame):
-        """Frame tap callback feeding live frame to ObservationEngine and video view."""
-        if hasattr(self, 'obs_engine') and self.obs_engine:
-            self.obs_engine.process_frame(frame)
+    # ── Controller Signal Handlers ──
 
-    def _on_transcript_tap(self, entry):
-        """Transcript tap callback feeding live transcript widget."""
-        role = "Interviewer" if entry.get("has_wake") else "Candidate"
-        text = entry.get("text", "")
-        if hasattr(self, 'transcript_widget') and self.transcript_widget:
-            self.transcript_widget.add_transcript(role, text)
+    def _on_state_changed(self, state_str):
+        logger.info(f"Interview state: {state_str}")
 
-    def _on_event_logged(self, event_type, message, payload, timestamp):
-        """Step 4: Show timeline events from session.emit_event in live page."""
-        if hasattr(self, 'transcript_widget') and self.transcript_widget:
-            self.transcript_widget.add_transcript("Timeline", f"[{event_type.upper()}] {message}")
+    def _on_interview_started(self, interview_id):
+        logger.info(f"Interview started: {interview_id}")
+        # Update live page header
+        if hasattr(self, '_live_title_lbl'):
+            setup = self.controller.session.setup if self.controller.session else None
+            if setup:
+                self._live_title_lbl.setText(
+                    f"📋 {setup.title} — {setup.candidate_name} ({setup.job_role})"
+                )
+        if hasattr(self, 'cam_panel'):
+            if self.engine and hasattr(self.engine, 'is_running') and self.engine.is_running:
+                self.cam_panel.set_camera_active(True)
+
+    def _on_interview_ended(self):
+        logger.info("Interview ended")
+        if hasattr(self, 'waveform_widget'):
+            self.waveform_widget.set_voice_activity(False)
+        if hasattr(self, 'cam_panel'):
+            self.cam_panel.set_camera_active(False)
+
+    def _on_report_ready(self, report):
+        logger.info("Report generated")
+        self.reports_page.load_report(report, self.controller.session)
+        self._on_nav_click("iv_reports")
+
+    def _on_error(self, title, detail):
+        QMessageBox.critical(self, title, detail)
+
+    def _on_talk_time_updated(self):
+        m = self.controller.metrics
+        if hasattr(self, 'talk_time_widget') and m.interviewer_talk_pct is not None:
+            self.talk_time_widget.set_talk_time(m.interviewer_talk_pct, m.candidate_talk_pct)
+
+        # Update WPM card
+        if hasattr(self, 'card_pace') and m.current_wpm is not None:
+            wpm = int(m.current_wpm)
+            if wpm > 0:
+                if wpm < 100:
+                    tag = "Slow"
+                elif wpm < 160:
+                    tag = "Normal"
+                else:
+                    tag = "Fast"
+                self.card_pace.set_metric(f"{wpm} WPM", min(100, int(wpm / 1.6)), tag, Theme.ACCENT_GREEN)
+
+        # Update waveform
+        if hasattr(self, 'waveform_widget') and m.current_wpm:
+            self.waveform_widget.set_voice_activity(True, m._last_speaker or "Speaker", m.current_wpm)
+
+    def _on_transcript_entry(self, speaker, text, timestamp):
+        ts_str = time.strftime("%H:%M:%S", time.localtime(timestamp))
+        role = "Interviewer" if speaker == "interviewer" else "Candidate"
+        if hasattr(self, 'transcript_widget'):
+            self.transcript_widget.add_transcript(role, text, ts_str)
+
+    def _on_observation(self, obs):
+        count = len(self.controller.metrics.observations)
+        if hasattr(self, 'card_observations'):
+            self.card_observations.set_metric(
+                f"{count} observation{'s' if count != 1 else ''}",
+                min(100, count * 15), "Active", Theme.ACCENT_ORANGE
+            )
+        # Add to transcript as timeline event
+        if hasattr(self, 'transcript_widget'):
+            self.transcript_widget.add_transcript(
+                "System", f"[{obs.event_type.upper()}] {obs.message}"
+            )
+
+    def _on_question_changed(self, index, text):
+        if hasattr(self, '_question_label'):
+            self._question_label.setText(f"Q{index + 1}: {text}")
+
+    def _on_fairness_alert(self, question, warning, ts):
+        if hasattr(self, 'coaching_widget'):
+            self.coaching_widget.set_suggestion(f"⚠ {warning}")
+        if hasattr(self, 'transcript_widget'):
+            self.transcript_widget.add_transcript(
+                "Fairness", warning, time.strftime("%H:%M:%S", time.localtime(ts))
+            )
+
+    def _on_coaching_suggestion(self, suggestion):
+        if hasattr(self, 'coaching_widget'):
+            self.coaching_widget.set_suggestion(suggestion)
+
+    def _on_paste_probes(self, probes):
+        if hasattr(self, 'transcript_widget'):
+            self.transcript_widget.add_transcript(
+                "System", f"Generated {len(probes)} probe questions from pasted code"
+            )
+
+    # ── End Interview ──
+
+    def _on_end_interview(self):
+        """End the live interview."""
+        if not self.controller.is_live:
+            return
+        reply = QMessageBox.question(
+            self, "End Interview",
+            "Are you sure you want to end this interview?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.controller.end_interview()
+
+    # ── Question Navigation ──
 
     def _on_nav_question(self, delta):
-        pass
+        self.controller.navigate_question(delta)
 
     # ── Sub-page builders ──
 
@@ -238,16 +358,19 @@ class InterviewDashboard(QWidget):
         layout.setContentsMargins(32, 28, 32, 32)
         layout.setSpacing(24)
 
-        header = SectionHeader("Interview Dashboard", "Manage and monitor AI-powered interviews")
+        header = SectionHeader("AI Interviewer Coach", "Real-time coaching to improve your interview quality")
         layout.addWidget(header)
 
-        # Stats
+        # Stats — from real database
         stats_row = QHBoxLayout()
         stats_row.setSpacing(16)
+        total = interview_store.get_interview_count()
+        completed = interview_store.get_interview_count("reported")
+        live = interview_store.get_interview_count("live")
         for lbl, val, icon, color in [
-            ("Total Interviews", "0", "📊", Theme.ACCENT_BLUE),
-            ("Active Now", "0", "🔴", Theme.ACCENT_RED),
-            ("Completed", "0", "✅", Theme.ACCENT_GREEN),
+            ("Total Interviews", str(total), "📊", Theme.ACCENT_BLUE),
+            ("Active Now", str(live), "🔴", Theme.ACCENT_RED),
+            ("Completed", str(completed), "✅", Theme.ACCENT_GREEN),
             ("Avg Score", "—", "⭐", Theme.ACCENT_ORANGE),
         ]:
             card = _MiniStatCard(lbl, val, icon, color)
@@ -257,7 +380,7 @@ class InterviewDashboard(QWidget):
         # Empty state
         empty = _EmptyState(
             "No Interview Running",
-            "Create a new interview session to get started with AI-powered candidate evaluation.",
+            "Create a new interview session to get started with AI-powered interviewer coaching.",
             "Start New Interview"
         )
         empty.action_clicked.connect(lambda: self._on_nav_click("iv_create"))
@@ -307,14 +430,14 @@ class InterviewDashboard(QWidget):
         self.input_role = QLineEdit()
         self.input_role.setPlaceholderText("e.g. Backend Engineer")
         self.input_candidate = QLineEdit()
-        self.input_candidate.setPlaceholderText("e.g. John Doe")
+        self.input_candidate.setPlaceholderText("Candidate name (required)")
         self.input_meeting = QLineEdit()
         self.input_meeting.setPlaceholderText("e.g. https://meet.google.com/...")
 
         fields = [
-            ("Interview Title", self.input_title),
-            ("Job Role", self.input_role),
-            ("Candidate Name", self.input_candidate),
+            ("Interview Title *", self.input_title),
+            ("Job Role *", self.input_role),
+            ("Candidate Name *", self.input_candidate),
             ("Meeting Link", self.input_meeting),
         ]
         for label_text, widget in fields:
@@ -439,43 +562,130 @@ class InterviewDashboard(QWidget):
         page_layout.addWidget(scroll)
         return page
 
-    def _build_live_interview(self):
-        """Professional meeting-like interface for live interviews with real-time video, waveform, and AI analytics."""
+    def _build_preflight_page(self):
+        """Pre-flight readiness check page."""
         page = QWidget()
         page.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(page)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(32, 28, 32, 32)
+        layout.setSpacing(20)
+
+        header = SectionHeader("Interview Readiness", "Checking all required services before starting")
+        layout.addWidget(header)
+
+        card = QWidget()
+        card.setStyleSheet(f"""
+            QWidget {{
+                background-color: {Theme.BG_CARD};
+                border: 1px solid {Theme.BORDER_SUBTLE};
+                border-radius: {Theme.RADIUS_LG}px;
+            }}
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(28, 24, 28, 28)
+        card_layout.setSpacing(8)
+
+        # Create labels for each service check
+        self._preflight_labels = {}
+        services = [
+            "Database", "Session", "Observation Engine",
+            "Camera", "Microphone", "Speech Recognition",
+            "AI / Gemini", "Screen Capture"
+        ]
+        for svc in services:
+            lbl = QLabel(f"  ⏳ {svc}: Checking...")
+            lbl.setFont(QFont("Segoe UI", 12))
+            lbl.setStyleSheet(f"color: {Theme.TEXT_MUTED}; padding: 4px 8px; background: transparent;")
+            card_layout.addWidget(lbl)
+            self._preflight_labels[svc] = lbl
+
+        card_layout.addSpacing(16)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+
+        cancel_btn = GlowButton("Cancel", "❌", gradient=(Theme.BORDER_SUBTLE, Theme.BORDER_HOVER))
+        cancel_btn.setFixedHeight(44)
+        cancel_btn.clicked.connect(lambda: self._on_nav_click("iv_create"))
+        btn_row.addWidget(cancel_btn)
+
+        self._preflight_start_btn = GlowButton("Checking...", "🚀",
+                                                 gradient=(Theme.ACCENT_BLUE, Theme.ACCENT_PURPLE))
+        self._preflight_start_btn.setFixedHeight(44)
+        self._preflight_start_btn.setEnabled(False)
+        self._preflight_start_btn.clicked.connect(self._on_preflight_start)
+        btn_row.addWidget(self._preflight_start_btn)
+
+        card_layout.addLayout(btn_row)
+        layout.addWidget(card)
+        layout.addStretch()
+        return page
+
+    def _build_live_interview(self):
+        """Live interview page with real-time metrics from InterviewController."""
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Left: Video streams, Audio Waveform & Transcript ──
+        # ── TOP BAR ──
+        top_bar = QWidget()
+        top_bar.setFixedHeight(48)
+        top_bar.setStyleSheet(f"background-color: {Theme.BG_CARD}; border-bottom: 1px solid {Theme.BORDER_SUBTLE};")
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(16, 0, 16, 0)
+
+        self._live_title_lbl = QLabel("📋 Interview — Waiting to start")
+        self._live_title_lbl.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self._live_title_lbl.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; background: transparent;")
+        top_layout.addWidget(self._live_title_lbl)
+
+        top_layout.addStretch()
+
+        self._live_timer_lbl = QLabel("⏱ 00:00")
+        self._live_timer_lbl.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self._live_timer_lbl.setStyleSheet(f"color: {Theme.ACCENT_CYAN}; background: transparent;")
+        top_layout.addWidget(self._live_timer_lbl)
+
+        live_badge = StatusBadge("LIVE", "active")
+        top_layout.addWidget(live_badge)
+
+        layout.addWidget(top_bar)
+
+        # ── MAIN AREA ──
+        main_area = QHBoxLayout()
+        main_area.setContentsMargins(0, 0, 0, 0)
+        main_area.setSpacing(0)
+
+        # Left: Video + Audio + Transcript
         left_area = QWidget()
         left_area.setStyleSheet("background: transparent;")
         left_layout = QVBoxLayout(left_area)
         left_layout.setContentsMargins(18, 16, 12, 16)
         left_layout.setSpacing(10)
 
-        # Top Stream row: Candidate camera & Screen share
+        # Video streams
         streams_row = QHBoxLayout()
         streams_row.setSpacing(10)
-
-        self.cam_panel = LiveVideoPanel("Candidate Camera (HD)", "📹", is_screen_share=False)
-        self.screen_panel = LiveVideoPanel("Screen Share / Workspace", "🖥", is_screen_share=True)
-
+        self.cam_panel = LiveVideoPanel("Candidate Camera", "📹", is_screen_share=False)
+        self.screen_panel = LiveVideoPanel("Screen Share", "🖥", is_screen_share=True)
         streams_row.addWidget(self.cam_panel, 1)
         streams_row.addWidget(self.screen_panel, 1)
         left_layout.addLayout(streams_row, 3)
 
-        # Audio Waveform Visualizer (Real-time voice spectrum)
+        # Audio Waveform
         self.waveform_widget = AudioWaveformWidget(num_bars=32)
         left_layout.addWidget(self.waveform_widget)
 
-        # Live Transcript Ticker
+        # Live Transcript
         self.transcript_widget = LiveTranscriptWidget()
         left_layout.addWidget(self.transcript_widget)
 
-        layout.addWidget(left_area, 3)
+        main_area.addWidget(left_area, 3)
 
-        # ── Right: AI Intelligence & Live Analytics ──
+        # ── Right Panel: AI Interviewer Coach ──
         right_panel = QWidget()
         right_panel.setFixedWidth(380)
         right_panel.setStyleSheet(f"""
@@ -486,64 +696,84 @@ class InterviewDashboard(QWidget):
         """)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(16, 16, 16, 16)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
 
-        # Title & Live Badge Header
+        # Header
         header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-
-        ai_title = QLabel("🤖 AI Interview Agent")
+        ai_title = QLabel("🤖 AI Interviewer Coach")
         ai_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         ai_title.setStyleSheet(f"color: {Theme.TEXT_PRIMARY}; border: none; background: transparent;")
         header_row.addWidget(ai_title)
-
-        live_badge = StatusBadge("LIVE", "active")
-        header_row.addWidget(live_badge, alignment=Qt.AlignRight)
+        header_row.addStretch()
         right_layout.addLayout(header_row)
 
-        status_lbl = QLabel("● Real-time Monitoring & AI Assistant Active")
-        status_lbl.setFont(QFont("Segoe UI", 11, QFont.DemiBold))
-        status_lbl.setStyleSheet(f"color: {Theme.ACCENT_GREEN}; border: none; background: transparent;")
-        right_layout.addWidget(status_lbl)
+        # Talk-Time Widget
+        self.talk_time_widget = TalkTimeWidget()
+        right_layout.addWidget(self.talk_time_widget)
 
-        # Live Metric Cards
-        self.card_pace = LiveMetricCard("Communication Pace", "142 WPM", 88, "Optimal", Theme.ACCENT_GREEN)
-        self.card_eye = LiveMetricCard("Eye Contact Ratio", "94%", 94, "Strong", Theme.ACCENT_CYAN)
-        self.card_integrity = LiveMetricCard("Integrity Monitor", "Clean", 98, "Verified", Theme.ACCENT_GREEN)
-        self.card_coding = LiveMetricCard("Coding Analytics", "Python", 85, "O(n) Time", Theme.ACCENT_PURPLE)
+        # Coaching Suggestion
+        self.coaching_widget = CoachingSuggestionWidget()
+        right_layout.addWidget(self.coaching_widget)
+
+        # Live Metric Cards — all start with waiting/empty state
+        self.card_pace = LiveMetricCard("Communication Pace", "—", 0, "Waiting...", Theme.TEXT_MUTED)
+        self.card_observations = LiveMetricCard("Observations", "0", 0, "No observations", Theme.TEXT_MUTED)
+        self.card_interruptions = LiveMetricCard("Interruptions", "0", 0, "None detected", Theme.TEXT_MUTED)
 
         right_layout.addWidget(self.card_pace)
-        right_layout.addWidget(self.card_eye)
-        right_layout.addWidget(self.card_integrity)
-        right_layout.addWidget(self.card_coding)
+        right_layout.addWidget(self.card_observations)
+        right_layout.addWidget(self.card_interruptions)
 
-        # Standard Analysis Sections for AI Assistant and Notes
-        sections = [
-            ("AI Assistant Prompt", "Ready for commands..."),
-            ("Interview Notes", "Auto-generating summary...")
-        ]
-        for name, status in sections:
-            section = _AnalysisSection(name)
-            section._status = status
-            right_layout.addWidget(section)
-
-        # AI Companion Status Bubble
-        companion_bubble = QLabel("💬 AI Companion: Listening to speech stream & tracking gesture shortcuts...")
-        companion_bubble.setWordWrap(True)
-        companion_bubble.setStyleSheet(f"""
-            background-color: {Theme.BG_DARKER};
-            color: {Theme.TEXT_PRIMARY};
-            border-radius: 8px;
-            padding: 10px;
-            font-style: italic;
-            font-size: 11px;
+        # Current Question
+        self._question_label = QLabel("No questions loaded")
+        self._question_label.setWordWrap(True)
+        self._question_label.setFont(QFont("Segoe UI", 10))
+        self._question_label.setStyleSheet(f"""
+            color: {Theme.TEXT_PRIMARY}; background-color: {Theme.BG_DARKER};
+            border-radius: 8px; padding: 10px; border: none;
         """)
-        right_layout.addWidget(companion_bubble)
+        right_layout.addWidget(self._question_label)
+
+        # Question nav buttons
+        q_btn_row = QHBoxLayout()
+        q_btn_row.setSpacing(8)
+        prev_btn = QPushButton("← Prev")
+        prev_btn.setStyleSheet(f"background: {Theme.BG_DARKER}; color: {Theme.TEXT_PRIMARY}; padding: 6px 12px; border-radius: 6px; border: 1px solid {Theme.BORDER_SUBTLE};")
+        prev_btn.clicked.connect(lambda: self._on_nav_question(-1))
+        next_btn = QPushButton("Next →")
+        next_btn.setStyleSheet(f"background: {Theme.BG_DARKER}; color: {Theme.TEXT_PRIMARY}; padding: 6px 12px; border-radius: 6px; border: 1px solid {Theme.BORDER_SUBTLE};")
+        next_btn.clicked.connect(lambda: self._on_nav_question(1))
+        q_btn_row.addWidget(prev_btn)
+        q_btn_row.addWidget(next_btn)
+        q_btn_row.addStretch()
+        right_layout.addLayout(q_btn_row)
 
         right_layout.addStretch()
-        layout.addWidget(right_panel)
+
+        # End Interview button
+        end_btn = GlowButton("End Interview", "⏹",
+                              gradient=(Theme.ACCENT_RED, Theme.ACCENT_ORANGE))
+        end_btn.setFixedHeight(40)
+        end_btn.clicked.connect(self._on_end_interview)
+        right_layout.addWidget(end_btn)
+
+        main_area.addWidget(right_panel)
+
+        layout.addLayout(main_area)
+
+        # Connect timer
+        if self.controller.session:
+            self.controller.session.timer_tick.connect(self._on_timer_tick)
 
         return page
+
+    def _on_timer_tick(self, remaining_seconds):
+        mins = remaining_seconds // 60
+        secs = remaining_seconds % 60
+        if hasattr(self, '_live_timer_lbl'):
+            self._live_timer_lbl.setText(f"⏱ {mins:02d}:{secs:02d}")
+
+    # ── Helper Widgets ──
 
     def _build_placeholder(self, title, icon, message):
         page = QWidget()
@@ -552,7 +782,6 @@ class InterviewDashboard(QWidget):
         layout.setContentsMargins(32, 28, 32, 32)
         layout.addWidget(SectionHeader(title))
         layout.addSpacing(40)
-
         empty = _EmptyState(title, message)
         layout.addWidget(empty)
         layout.addStretch()
@@ -667,62 +896,3 @@ class _EmptyState(QWidget):
             btn.setFixedWidth(200)
             btn.clicked.connect(self.action_clicked.emit)
             layout.addWidget(btn, alignment=Qt.AlignCenter)
-
-
-class _VideoPlaceholder(QWidget):
-    def __init__(self, title, icon, message, parent=None):
-        super().__init__(parent)
-        self._title = title
-        self._icon = icon
-        self._message = message
-        self.setMinimumHeight(150)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, 12, 12)
-        p.fillPath(path, QBrush(QColor(Theme.BG_DARKEST)))
-        p.setPen(QPen(QColor(Theme.BORDER_SUBTLE), 1))
-        p.drawRoundedRect(1, 1, w - 2, h - 2, 12, 12)
-
-        p.setPen(QColor(Theme.TEXT_MUTED))
-        p.setFont(QFont("Segoe UI Emoji", 32))
-        p.drawText(self.rect().adjusted(0, -20, 0, 0), Qt.AlignCenter, self._icon)
-
-        p.setFont(QFont("Segoe UI", 11))
-        p.drawText(self.rect().adjusted(0, 30, 0, 0), Qt.AlignCenter, self._message)
-
-        # Title badge
-        p.setPen(QColor(Theme.TEXT_SECONDARY))
-        p.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
-        p.drawText(12, 18, self._title)
-        p.end()
-
-
-class _AnalysisSection(QWidget):
-    def __init__(self, title, parent=None):
-        super().__init__(parent)
-        self._title = title
-        self._status = "No data"
-        self.setFixedHeight(48)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, 8, 8)
-        p.fillPath(path, QBrush(QColor(Theme.BG_DARKER)))
-
-        p.setPen(QColor(Theme.TEXT_SECONDARY))
-        p.setFont(QFont("Segoe UI", 11))
-        p.drawText(12, 0, w // 2, h, Qt.AlignLeft | Qt.AlignVCenter, self._title)
-
-        p.setPen(QColor(Theme.TEXT_MUTED))
-        p.setFont(QFont("Segoe UI", 10))
-        p.drawText(0, 0, w - 12, h, Qt.AlignRight | Qt.AlignVCenter, self._status)
-        p.end()

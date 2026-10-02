@@ -1,13 +1,23 @@
-# ============================================================
-#  TEST SUITE: AI TECHNICAL SUPPORT EXECUTIVE (MODULES 1 - 10)
-# ============================================================
-
-import os
 import sys
+import os
 import time
+from pathlib import Path
 
-# Ensure project root is in sys.path
-sys.path.insert(0, r"d:\Ai_Build")
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+# Register intent_platform module
+import types
+import core, ui, config, database
+ip_mod = types.ModuleType('intent_platform')
+ip_mod.__path__ = [str(BASE_DIR)]
+sys.modules['intent_platform'] = ip_mod
+sys.modules['intent_platform.core'] = core
+sys.modules['intent_platform.ui'] = ui
+sys.modules['intent_platform.config'] = config
+sys.modules['intent_platform.database'] = database
+
 
 def run_all_tests():
     print("[TEST SUITE] Starting AI Technical Support Executive validation...")

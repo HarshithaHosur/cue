@@ -12,6 +12,7 @@ from intent_platform.ui.theme import Theme
 from intent_platform.ui.widgets.components import (
     DashboardCard, SectionHeader, StatCard, GlowButton, StatusBadge
 )
+from intent_platform.ui.widgets.control_center import ControlCenterWidget
 
 
 class HomeDashboard(QWidget):
@@ -71,6 +72,10 @@ class HomeDashboard(QWidget):
             stats_layout.addWidget(card)
 
         main_layout.addLayout(stats_layout)
+
+        # ── Control Center (Capabilities ON/OFF) ──
+        self.control_center = ControlCenterWidget()
+        main_layout.addWidget(self.control_center)
 
         # ── Agent Cards ──
         cards_header = SectionHeader(title="AI Agents", subtitle="Launch a specialized AI workspace")
