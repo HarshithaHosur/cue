@@ -22,6 +22,7 @@ scratch/
 # Environment Variables & Secrets (CRITICAL: NEVER COMMIT)
 .env
 .env.*
+!.env.example
 *.env
 *.key
 *.pem

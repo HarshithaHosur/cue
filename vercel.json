@@ -1,0 +1,9 @@
+{
+  "installCommand": "npm --prefix web/frontend install",
+  "buildCommand": "npm --prefix web/frontend run build",
+  "outputDirectory": "web/frontend/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.py" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
