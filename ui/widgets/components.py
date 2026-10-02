@@ -426,3 +426,80 @@ class StatCard(QWidget):
         p.drawText(QRect(64, 48, w - 80, 24), Qt.AlignLeft | Qt.AlignVCenter, self._label)
 
         p.end()
+
+
+# ============================================================
+#  ToggleSwitch — Modern Animated Pill Switch
+# ============================================================
+
+class ToggleSwitch(QWidget):
+    """Modern iOS/Glassmorphism style animated toggle switch."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, checked=True, parent=None):
+        super().__init__(parent)
+        self._checked = checked
+        self._offset = 26.0 if checked else 4.0
+        self.setFixedSize(52, 28)
+        self.setCursor(Qt.PointingHandCursor)
+
+        self._anim = QPropertyAnimation(self, b"offset")
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _get_offset(self):
+        return self._offset
+
+    def _set_offset(self, val):
+        self._offset = val
+        self.update()
+
+    offset = Property(float, _get_offset, _set_offset)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool, emit_signal: bool = True):
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self._anim.stop()
+        self._anim.setStartValue(self._offset)
+        self._anim.setEndValue(26.0 if checked else 4.0)
+        self._anim.start()
+        if emit_signal:
+            self.toggled.emit(self._checked)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked, emit_signal=True)
+            event.accept()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        # Track background
+        track_path = QPainterPath()
+        track_path.addRoundedRect(0, 0, self.width(), self.height(), 14, 14)
+
+        if self._checked:
+            grad = QLinearGradient(0, 0, self.width(), self.height())
+            grad.setColorAt(0, QColor(Theme.ACCENT_CYAN))
+            grad.setColorAt(1, QColor(Theme.ACCENT_BLUE))
+            p.fillPath(track_path, QBrush(grad))
+        else:
+            p.fillPath(track_path, QBrush(QColor(Theme.BG_DARKER)))
+            p.setPen(QPen(QColor(Theme.BORDER_SUBTLE), 1.5))
+            p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 14, 14)
+
+        # Thumb knob
+        thumb_diameter = 20
+        thumb_y = 4
+        thumb_path = QPainterPath()
+        thumb_path.addEllipse(self._offset, thumb_y, thumb_diameter, thumb_diameter)
+        p.fillPath(thumb_path, QBrush(QColor("white")))
+
+        p.end()
+

@@ -22,6 +22,8 @@ from intent_platform.ui.companion.companion_window import DesktopCompanionOverla
 from intent_platform.core.support.support_agent import get_support_agent
 from intent_platform.core.support.highlighter import initialize_highlighter
 from intent_platform.core.support.audit_logger import global_audit_logger
+from intent_platform.core.agent.agent_controller import get_agent_controller, AgentState
+from intent_platform.core.features.feature_manager import get_feature_manager, Feature
 
 
 class MainWindow(QMainWindow):
@@ -35,9 +37,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
 
-        # Companion overlay — starts hidden until user clicks Robot button
+        # Unified singletons
+        self.agent_controller = get_agent_controller()
+        self.feature_manager = get_feature_manager()
+
+        # Companion overlay — positioned dynamically at resting bottom-right
         self.companion = DesktopCompanionOverlay()
-        self.companion.move(1400, 600)
+        self.companion.snap_to_resting_position()
+        self.companion.show()
 
         # Initialize screen highlighter overlay (must exist before agent starts)
         self.screen_highlighter = initialize_highlighter()
@@ -297,27 +304,23 @@ class MainWindow(QMainWindow):
         self._switch_page(target_idx)
 
     def _toggle_agent(self):
-        if not self.engine:
-            return
-        if self.engine.is_agent_active:
-            self.engine.deactivate_agent()
-            self.btn_agent.setText("⚡ Activate AI Agent")
-            self.btn_agent.setStyleSheet(f"""
-                QPushButton {{
-                    background: {Theme.SURFACE1};
-                    color: {Theme.TEXT};
-                    padding: 6px 14px;
-                    border-radius: 8px;
-                    font-weight: 700;
-                    font-size: 12px;
-                    border: 1px solid {Theme.BLUE};
-                }}
-                QPushButton:hover {{
-                    background: {Theme.SURFACE2};
-                }}
-            """)
+        """Unified dashboard button toggle via central AgentController."""
+        self.agent_controller.toggle(source="dashboard_button")
+
+    def _toggle_companion(self):
+        """Toggles companion visibility while preserving agent state."""
+        if self.companion.isVisible():
+            self.companion.hide()
+            if self.agent_controller.is_active:
+                self.agent_controller.deactivate(source="companion_hide")
         else:
-            self.engine.activate_agent()
+            self.companion.show()
+            self.companion.snap_to_resting_position()
+
+    @Slot(str, str)
+    def _on_agent_state_changed(self, state_str: str, message: str):
+        """Synchronizes main window button state with AgentController."""
+        if state_str in (AgentState.ACTIVATING.value, AgentState.ACTIVE.value, AgentState.PROCESSING.value):
             self.btn_agent.setText("⏹️ Deactivate AI Agent")
             self.btn_agent.setStyleSheet(f"""
                 QPushButton {{
@@ -335,50 +338,27 @@ class MainWindow(QMainWindow):
             """)
             if not self.companion.isVisible():
                 self.companion.show()
-
-    def _toggle_companion(self):
-        if self.companion.isVisible():
-            self.companion.hide()
-            # Deactivate agent when companion is hidden
-            if self.engine and self.engine.is_agent_active:
-                self.engine.deactivate_agent()
-                self.btn_agent.setText("⚡ Activate AI Agent")
-                self.btn_agent.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {Theme.SURFACE1};
-                        color: {Theme.TEXT};
-                        padding: 6px 14px;
-                        border-radius: 8px;
-                        font-weight: 700;
-                        font-size: 12px;
-                        border: 1px solid {Theme.BLUE};
-                    }}
-                    QPushButton:hover {{
-                        background: {Theme.SURFACE2};
-                    }}
-                """)
         else:
-            self.companion.show()
-            # Activate agent when companion is shown
-            if self.engine and not self.engine.is_agent_active:
-                self.engine.activate_agent()
-                self.btn_agent.setText("⏹️ Deactivate AI Agent")
-                self.btn_agent.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {Theme.BLUE};
-                        color: {Theme.BASE};
-                        padding: 6px 14px;
-                        border-radius: 8px;
-                        font-weight: 700;
-                        font-size: 12px;
-                        border: none;
-                    }}
-                    QPushButton:hover {{
-                        background: {Theme.SAPPHIRE};
-                    }}
-                """)
+            self.btn_agent.setText("⚡ Activate AI Agent")
+            self.btn_agent.setStyleSheet(f"""
+                QPushButton {{
+                    background: {Theme.SURFACE1};
+                    color: {Theme.TEXT};
+                    padding: 6px 14px;
+                    border-radius: 8px;
+                    font-weight: 700;
+                    font-size: 12px;
+                    border: 1px solid {Theme.BLUE};
+                }}
+                QPushButton:hover {{
+                    background: {Theme.SURFACE2};
+                }}
+            """)
 
     def _connect_engine(self):
+        # Connect AgentController lifecycle state
+        self.agent_controller.signals.state_changed.connect(self._on_agent_state_changed)
+
         if not self.engine:
             return
 

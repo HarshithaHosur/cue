@@ -1,0 +1,7 @@
+{
+  "voice": true,
+  "gesture": true,
+  "mouse": true,
+  "vision": true,
+  "ai_agent": true
+}

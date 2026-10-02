@@ -1,0 +1,18 @@
+{
+  "include": [
+    "config",
+    "core",
+    "database",
+    "ui",
+    "main.py"
+  ],
+  "exclude": [
+    "venv",
+    "**/__pycache__"
+  ],
+  "extraPaths": [
+    "."
+  ],
+  "venvPath": ".",
+  "venv": "venv"
+}
