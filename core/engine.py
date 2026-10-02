@@ -137,11 +137,13 @@ class IntentEngine(QThread):
     def _on_agent_activated(self, source: str):
         logger.info(f"[ENGINE] AI Agent activated via '{source}'")
         self.current_mode = "idle"
+        self.voice_engine.set_paused(False)
         self.signals.companion_state.emit("idle", "AI Agent Activated")
 
     def _on_agent_deactivated(self, source: str):
         logger.info(f"[ENGINE] AI Agent deactivated via '{source}'")
         self.cursor_controller.release()
+        self.voice_engine.set_paused(True)
         self._switch_mode("idle")
         self.signals.companion_state.emit("idle", "AI Agent Deactivated")
 
@@ -154,11 +156,13 @@ class IntentEngine(QThread):
     def activate_agent(self):
         """Initializes all modules through unified AgentController."""
         self._agent_controller.activate(source="button")
+        self.voice_engine.set_paused(False)
         self.voice_engine.speak("AI Agent Activated")
 
     def deactivate_agent(self):
         """Safely deactivates through unified AgentController."""
         self._agent_controller.deactivate(source="button")
+        self.voice_engine.set_paused(True)
         self.voice_engine.speak("AI Agent Deactivated")
 
     def _on_voice_status(self, status: str):
